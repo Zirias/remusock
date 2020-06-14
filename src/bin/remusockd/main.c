@@ -1,7 +1,6 @@
 #include "daemon.h"
-#include "log.h"
+#include "syslog.h"
 
-#include <stdio.h>
 #include <unistd.h>
 
 int dmain(void *data)
@@ -14,7 +13,7 @@ int dmain(void *data)
 
 int main(void)
 {
-    setFileLogger(stderr);
+    setSyslogLogger(LOG_DAEMON, 1);
     return daemon_run(dmain, 0, "/tmp/remusockd.pid");
 }
 

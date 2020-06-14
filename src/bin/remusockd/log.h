@@ -21,6 +21,7 @@ void setMaxLogLevel(LogLevel level);
 void logmsg(LogLevel level, const char *message);
 void logfmt(LogLevel level, const char *format, ...);
 void logsetsilent(int silent);
+void writeFile(LogLevel level, const char *message, void *data);
 
 #endif
 

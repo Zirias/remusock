@@ -24,7 +24,7 @@ static const char *levels[] =
     "[DEBUG]  "
 };
 
-static void writeFile(LogLevel level, const char *message, void *data)
+void writeFile(LogLevel level, const char *message, void *data)
 {
     FILE *target = data;
     fputs(levels[level], target);
