@@ -50,7 +50,40 @@ int daemon_run(const daemon_main dmain, void *data, const char *pidfile)
 
     if (pid < 0)
     {
-	logmsg(L_ERROR, "failed to fork");
+	logmsg(L_ERROR, "failed to fork (1)");
+	goto done;
+    }
+
+    if (pid > 0)
+    {
+	return EXIT_SUCCESS;
+    }
+
+    sid = setsid();
+    if (sid < 0)
+    {
+	logmsg(L_ERROR, "setsid() failed");
+	goto done;
+    }
+
+    struct sigaction handler;
+    memset(&handler, 0, sizeof handler);
+    handler.sa_handler = SIG_IGN;
+    sigemptyset(&handler.sa_mask);
+    sigaction(SIGQUIT, &handler, 0);
+    sigaction(SIGTERM, &handler, 0);
+    sigaction(SIGINT, &handler, 0);
+    sigaction(SIGHUP, &handler, 0);
+    sigaction(SIGUSR1, &handler, 0);
+#ifndef DEBUG
+    sigaction(SIGSTOP, &handler, 0);
+#endif
+
+    pid = fork();
+
+    if (pid < 0)
+    {
+	logmsg(L_ERROR, "failed to fork (2)");
 	goto done;
     }
 
@@ -70,35 +103,18 @@ int daemon_run(const daemon_main dmain, void *data, const char *pidfile)
 	pf = 0;
     }
 
-    umask(0);
-    sid = setsid();
-    if (sid < 0)
-    {
-	logmsg(L_ERROR, "setsid() failed");
-	goto done;
-    }
     if (chdir("/") < 0)
     {
 	logmsg(L_ERROR, "chdir(\"/\") failed");
 	goto done;
     }
 
-    struct sigaction handler;
-    memset(&handler, 0, sizeof handler);
-    handler.sa_handler = SIG_IGN;
-    sigemptyset(&handler.sa_mask);
-    sigaction(SIGQUIT, &handler, 0);
-    sigaction(SIGTERM, &handler, 0);
-    sigaction(SIGINT, &handler, 0);
-    sigaction(SIGHUP, &handler, 0);
-    sigaction(SIGUSR1, &handler, 0);
-#ifndef DEBUG
-    sigaction(SIGSTOP, &handler, 0);
-#endif
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
+    umask(0);
+    freopen("/dev/null", "r", stdin);
+    freopen("/dev/null", "w", stdout);
+    freopen("/dev/null", "w", stderr);
 
+    logmsg(L_INFO, "forked into background");
     rc = dmain(data);
     if (pidfile) unlink(pidfile);
 
