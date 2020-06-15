@@ -2,6 +2,7 @@
 #include "daemon.h"
 #include "log.h"
 #include "service.h"
+#include "sockserver.h"
 #include "syslog.h"
 #include "tcpserver.h"
 
@@ -12,6 +13,7 @@ static int dmain(void *data)
 {
     Config *config = data;
     TcpServer *tcpserver = 0;
+    SockServer *sockserver = 0;
 
     Service_init(config);
 
@@ -36,7 +38,13 @@ static int dmain(void *data)
 	}
     }
 
-    int rc = Service_run();
+    sockserver = SockServer_create(config);
+    int rc = EXIT_FAILURE;
+    if (sockserver)
+    {
+	rc = Service_run();
+	SockServer_destroy(sockserver);
+    }
     TcpServer_destroy(tcpserver);
     Service_done();
     return rc;
