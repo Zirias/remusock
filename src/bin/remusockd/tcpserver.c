@@ -88,7 +88,7 @@ static void acceptConnection(void *receiver, int id,
 
 TcpServer *TcpServer_create(int port)
 {
-    int fd = socket(PF_INET, SOCK_STREAM, 0);
+    int fd = socket(PF_INET6, SOCK_STREAM, 0);
     if (fd < 0)
     {
 	logmsg(L_ERROR, "tcpserver: cannot create socket");
@@ -96,19 +96,22 @@ TcpServer *TcpServer_create(int port)
     }
 
     int opt_true = 1;
+    int opt_false = 0;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-		&opt_true, sizeof opt_true) < 0)
+		&opt_true, sizeof opt_true) < 0
+	    || setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
+		&opt_false, sizeof opt_false) < 0)
     {
 	logmsg(L_ERROR, "tcpserver: cannot set socket options");
 	close(fd);
 	return 0;
     }
 
-    struct sockaddr_in addr;
+    struct sockaddr_in6 addr;
     memset(&addr, 0, sizeof addr);
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_any;
+    addr.sin6_port = htons(port);
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0)
     {
