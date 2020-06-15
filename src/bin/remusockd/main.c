@@ -3,6 +3,7 @@
 #include "log.h"
 #include "service.h"
 #include "syslog.h"
+#include "tcpserver.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -10,6 +11,10 @@
 static int dmain(void *data)
 {
     Config *config = data;
+    TcpServer *tcpserver = 0;
+
+    Service_init(config);
+
     if (config->daemonize)
     {
 	setSyslogLogger(LOG_DAEMON, 0);
@@ -23,10 +28,11 @@ static int dmain(void *data)
     else
     {
 	logfmt(L_INFO, "listening on %d", config->port);
+	tcpserver = TcpServer_create(config->port);
     }
 
-    Service_init(config);
     int rc = Service_run();
+    TcpServer_destroy(tcpserver);
     Service_done();
     return rc;
 }
