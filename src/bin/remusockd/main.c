@@ -1,6 +1,7 @@
 #include "config.h"
 #include "daemon.h"
 #include "log.h"
+#include "service.h"
 #include "syslog.h"
 
 #include <stdlib.h>
@@ -24,8 +25,10 @@ static int dmain(void *data)
 	logfmt(L_INFO, "listening on %d", config->port);
     }
 
-    while(!sleep(1));
-    return 0;
+    Service_init(config);
+    int rc = Service_run();
+    Service_done();
+    return rc;
 }
 
 int main(int argc, char **argv)

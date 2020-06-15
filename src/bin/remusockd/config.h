@@ -1,7 +1,7 @@
 #ifndef REMUSOCKD_CONFIG_H
 #define REMUSOCKD_CONFIG_H
 
-typedef struct
+typedef struct Config
 {
     const char *pidfile;
     const char *sockname;

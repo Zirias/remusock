@@ -70,7 +70,6 @@ int daemon_run(const daemon_main dmain, void *data, const char *pidfile)
     memset(&handler, 0, sizeof handler);
     handler.sa_handler = SIG_IGN;
     sigemptyset(&handler.sa_mask);
-    sigaction(SIGQUIT, &handler, 0);
     sigaction(SIGTERM, &handler, 0);
     sigaction(SIGINT, &handler, 0);
     sigaction(SIGHUP, &handler, 0);
