@@ -5,6 +5,7 @@ typedef struct Config
 {
     const char *pidfile;
     const char *sockname;
+    const char *bindaddr;
     const char *remotehost;
     int sockClient;
     int daemonize;

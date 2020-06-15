@@ -11,9 +11,12 @@
 
 static void usage(char *prgname)
 {
-    fprintf(stderr, "Usage: %s [-cfpr] [pidfile] [remotehost] socket port\n",
+    fprintf(stderr, "Usage: %s [-bcfpr] [address] [pidfile] [remotehost]\n"
+	    "\t\tsocket port\n",
 	    prgname);
-    fputs("\n\t-c             open unix domain socket as client\n"
+    fputs("\n\t-b address     when listening, only bind to this address "
+	    "\t               instead of any\n"
+	    "\t-c             open unix domain socket as client\n"
 	    "\t-f             run in foreground\n"
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
@@ -27,6 +30,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 {
     int endflags = 0;
     int escapedash = 0;
+    int needaddress = 0;
     int needpidfile = 0;
     int needremotehost = 0;
     int needsocket = 1;
@@ -51,7 +55,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 
 	if (!endflags && !escapedash && *o == '-' && o[1])
 	{
-	    if (needpidfile || needremotehost)
+	    if (needaddress || needpidfile || needremotehost)
 	    {
 		usage(prgname);
 		return -1;
@@ -61,6 +65,15 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 	    {
 		switch (*o)
 		{
+		    case 'b':
+			needaddress = 1;
+			while (needaddress == needpidfile
+				|| needaddress == needremotehost)
+			{
+			    ++needaddress;
+			}
+			break;
+
 		    case 'c':
 			config->sockClient = 1;
 			break;
@@ -71,22 +84,39 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 
 		    case 'p':
 			needpidfile = 1;
-			if (needremotehost) needremotehost = 2;
+			while (needpidfile == needaddress
+				|| needpidfile == needremotehost)
+			{
+			    ++needpidfile;
+			}
 			break;
 
 		    case 'r':
 			needremotehost = 1;
-			if (needpidfile) needpidfile = 2;
+			while (needremotehost == needaddress
+				|| needremotehost == needpidfile)
+			{
+			    ++needremotehost;
+			}
 			break;
 
 		    default:
-			if (needpidfile > needremotehost)
+			if (needaddress > needpidfile
+				&& needaddress > needremotehost)
+			{
+			    config->bindaddr = o;
+			    needaddress = 0;
+			    goto next;
+			}
+			else if (needpidfile > needaddress
+				&& needpidfile > needremotehost)
 			{
 			    config->pidfile = o;
 			    needpidfile = 0;
 			    goto next;
 			}
-			else if (needremotehost > needpidfile)
+			else if (needremotehost > needaddress
+				&& needremotehost > needpidfile)
 			{
 			    config->remotehost = o;
 			    needremotehost = 0;
@@ -102,12 +132,20 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 	}
 	else
 	{
-	    if (needpidfile > needremotehost)
+	    if (needaddress > needpidfile
+		    && needaddress > needremotehost)
+	    {
+		config->bindaddr = o;
+		needaddress = 0;
+	    }
+	    else if (needpidfile > needaddress
+		    && needpidfile > needremotehost)
 	    {
 		config->pidfile = o;
 		needpidfile = 0;
 	    }
-	    else if (needremotehost > needpidfile)
+	    else if (needremotehost > needaddress
+		    && needremotehost > needpidfile)
 	    {
 		config->remotehost = o;
 		needremotehost = 0;
@@ -139,7 +177,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 	}
 next:	;
     }
-    if (needpidfile || needremotehost || needsocket || needport)
+    if (needaddress || needpidfile || needremotehost || needsocket || needport)
     {
 	usage(prgname);
 	return -1;

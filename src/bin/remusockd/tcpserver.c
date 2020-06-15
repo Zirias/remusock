@@ -1,9 +1,11 @@
+#include "config.h"
 #include "event.h"
 #include "log.h"
 #include "service.h"
 #include "tcpserver.h"
 #include "util.h"
 
+#include <netdb.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,7 +88,7 @@ static void acceptConnection(void *receiver, int id,
     logmsg(L_INFO, "tcpserver: client connected");
 }
 
-TcpServer *TcpServer_create(int port)
+TcpServer *TcpServer_create(const Config *config)
 {
     int fd = socket(PF_INET6, SOCK_STREAM, 0);
     if (fd < 0)
@@ -107,18 +109,29 @@ TcpServer *TcpServer_create(int port)
 	return 0;
     }
 
-    struct sockaddr_in6 addr;
-    memset(&addr, 0, sizeof addr);
-    addr.sin6_family = AF_INET6;
-    addr.sin6_addr = in6addr_any;
-    addr.sin6_port = htons(port);
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0)
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET6;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE|AI_ADDRCONFIG|AI_V4MAPPED;
+    struct addrinfo *res;
+    char portstr[6];
+    snprintf(portstr, 6, "%d", config->port);
+    if (getaddrinfo(config->bindaddr, portstr, &hints, &res) < 0)
     {
-	logmsg(L_ERROR, "tcpserver: cannot bind to specified address");
+	logmsg(L_ERROR, "tcpserver: cannot get address info");
 	close(fd);
 	return 0;
     }
+
+    if (bind(fd, res->ai_addr, res->ai_addrlen) < 0)
+    {
+	logmsg(L_ERROR, "tcpserver: cannot bind to specified address");
+	freeaddrinfo(res);
+	close(fd);
+	return 0;
+    }
+    freeaddrinfo(res);
 
     if (listen(fd, 8) < 0)
     {

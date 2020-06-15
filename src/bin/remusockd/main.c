@@ -28,7 +28,12 @@ static int dmain(void *data)
     else
     {
 	logfmt(L_INFO, "listening on %d", config->port);
-	tcpserver = TcpServer_create(config->port);
+	tcpserver = TcpServer_create(config);
+	if (!tcpserver)
+	{
+	    Service_done();
+	    return EXIT_FAILURE;
+	}
     }
 
     int rc = Service_run();
