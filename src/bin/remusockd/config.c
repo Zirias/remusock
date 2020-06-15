@@ -11,18 +11,18 @@
 
 static void usage(char *prgname)
 {
-    fprintf(stderr, "Usage: %s [-bcfpr] [address] [pidfile] [remotehost]\n"
-	    "\t\tsocket port\n",
+    fprintf(stderr, "Usage: %s [-cf]\n"
+	    "\t\t[-b address] [-p pidfile] [-r remotehost] socket port\n",
 	    prgname);
-    fputs("\n\t-b address     when listening, only bind to this address "
+    fputs("\n\t-b address     when listening, only bind to this address\n"
 	    "\t               instead of any\n"
 	    "\t-c             open unix domain socket as client\n"
 	    "\t-f             run in foreground\n"
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
 	    "\n"
-	    "\t   socket      unix domain socket to open\n"
-	    "\t   port        TCP port to connect to or listen on\n\n",
+	    "\tsocket         unix domain socket to open\n"
+	    "\tport           TCP port to connect to or listen on\n\n",
 	    stderr);
 }
 

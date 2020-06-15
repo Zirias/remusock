@@ -1,10 +1,9 @@
 #include "config.h"
 #include "daemon.h"
 #include "log.h"
+#include "server.h"
 #include "service.h"
-#include "sockserver.h"
 #include "syslog.h"
-#include "tcpserver.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -12,8 +11,8 @@
 static int dmain(void *data)
 {
     Config *config = data;
-    TcpServer *tcpserver = 0;
-    SockServer *sockserver = 0;
+    Server *tcpserver = 0;
+    Server *sockserver = 0;
 
     Service_init(config);
 
@@ -30,7 +29,7 @@ static int dmain(void *data)
     else
     {
 	logfmt(L_INFO, "listening on %d", config->port);
-	tcpserver = TcpServer_create(config);
+	tcpserver = Server_createTcp(config);
 	if (!tcpserver)
 	{
 	    Service_done();
@@ -38,14 +37,14 @@ static int dmain(void *data)
 	}
     }
 
-    sockserver = SockServer_create(config);
+    sockserver = Server_createUnix(config);
     int rc = EXIT_FAILURE;
     if (sockserver)
     {
 	rc = Service_run();
-	SockServer_destroy(sockserver);
+	Server_destroy(sockserver);
     }
-    TcpServer_destroy(tcpserver);
+    Server_destroy(tcpserver);
     Service_done();
     return rc;
 }
