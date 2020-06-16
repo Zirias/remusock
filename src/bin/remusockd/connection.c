@@ -18,6 +18,8 @@ typedef struct Connection
     Event *dataReceived;
     Event *dataSent;
     const char *wrbuf;
+    void *data;
+    void (*deleter)(void *);
     DataReceivedEventArgs args;
     int fd;
     uint16_t wrbuflen;
@@ -34,7 +36,7 @@ static void writeConnection(void *receiver, const void *sender,
     Connection *self = receiver;
     if (!self->wrbuflen)
     {
-	logmsg(L_ERROR, "server: ready to send with empty buffer");
+	logmsg(L_ERROR, "connection: ready to send with empty buffer");
 	Service_unregisterWrite(self->fd);
 	return;
     }
@@ -48,12 +50,12 @@ static void writeConnection(void *receiver, const void *sender,
 	    return;
 	}
 	self->wrbuflen = 0;
+	Service_unregisterWrite(self->fd);
 	Event_raise(self->dataSent, 0, 0);
-	if (!self->wrbuflen) Service_unregisterWrite(self->fd);
 	return;
     }
 
-    logmsg(L_WARNING, "server: error writing to connection");
+    logmsg(L_WARNING, "connection: error writing to connection");
     Event_raise(self->closed, 0, 0);
 }
 
@@ -66,7 +68,8 @@ static void readConnection(void *receiver, const void *sender,
     Connection *self = receiver;
     if (self->args.handling)
     {
-	logmsg(L_WARNING, "server: new data while read buffer still handled");
+	logmsg(L_WARNING,
+		"connection: new data while read buffer still handled");
 	return;
     }
 
@@ -81,11 +84,7 @@ static void readConnection(void *receiver, const void *sender,
 
     if (rc < 0)
     {
-	logmsg(L_WARNING, "server: error reading from connection");
-    }
-    else
-    {
-	logmsg(L_INFO, "server: client disconnected");
+	logmsg(L_WARNING, "connection: error reading from connection");
     }
     Event_raise(self->closed, 0, 0);
 }
@@ -98,6 +97,8 @@ Connection *Connection_create(int fd)
     self->dataSent = Event_create(self);
     self->fd = fd;
     self->wrbuflen = 0;
+    self->data = 0;
+    self->deleter = free;
     self->args.buf = self->rdbuf;
     self->args.handling = 0;
     Event_register(Service_readyRead(), self, readConnection, fd);
@@ -139,6 +140,30 @@ int Connection_confirmDataReceived(Connection *self)
     return 0;
 }
 
+void Connection_close(Connection *self)
+{
+    Event_raise(self->closed, 0, 0);
+}
+
+void Connection_setData(Connection *self, void *data, void (*deleter)(void *))
+{
+    self->deleter(self->data);
+    self->data = data;
+    if (deleter)
+    {
+	self->deleter = deleter;
+    }
+    else
+    {
+	self->deleter = free;
+    }
+}
+
+void *Connection_data(Connection *self)
+{
+    return self->data;
+}
+
 void Connection_destroy(Connection *self)
 {
     if (!self) return;
@@ -148,6 +173,7 @@ void Connection_destroy(Connection *self)
     Event_unregister(Service_readyRead(), self, readConnection, self->fd);
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
     close(self->fd);
+    self->deleter(self->data);
     Event_destroy(self->dataSent);
     Event_destroy(self->dataReceived);
     Event_destroy(self->closed);

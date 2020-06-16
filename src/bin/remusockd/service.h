@@ -13,6 +13,7 @@ void Service_unregisterRead(int id);
 void Service_registerWrite(int id);
 void Service_unregisterWrite(int id);
 int Service_run(void);
+void Service_quit(void);
 void Service_done(void);
 
 #endif

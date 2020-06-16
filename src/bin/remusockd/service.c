@@ -141,7 +141,7 @@ int Service_run(void)
     }
 
     logmsg(L_INFO, "service starting");
-    for (;;)
+    while (!shutdownRequest)
     {
 	fd_set rfds;
 	fd_set wfds;
@@ -193,6 +193,11 @@ done:
     }
 
     return rc;
+}
+
+void Service_quit(void)
+{
+    shutdownRequest = 1;
 }
 
 void Service_done(void)

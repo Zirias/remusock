@@ -1,6 +1,7 @@
 #include "config.h"
 #include "daemon.h"
 #include "log.h"
+#include "protocol.h"
 #include "server.h"
 #include "service.h"
 #include "syslog.h"
@@ -11,40 +12,18 @@
 static int dmain(void *data)
 {
     Config *config = data;
-    Server *tcpserver = 0;
-    Server *sockserver = 0;
-
-    Service_init(config);
-
     if (config->daemonize)
     {
 	setSyslogLogger(LOG_DAEMON, 0);
     }
 
-    logfmt(L_INFO, "socket: %s", config->sockname);
-    if (config->remotehost)
-    {
-	logfmt(L_INFO, "remote: %s:%d", config->remotehost, config->port);
-    }
-    else
-    {
-	logfmt(L_INFO, "listening on %d", config->port);
-	tcpserver = Server_createTcp(config);
-	if (!tcpserver)
-	{
-	    Service_done();
-	    return EXIT_FAILURE;
-	}
-    }
-
-    sockserver = Server_createUnix(config);
+    Service_init(config);
     int rc = EXIT_FAILURE;
-    if (sockserver)
+    if (Protocol_init(config) >= 0)
     {
 	rc = Service_run();
-	Server_destroy(sockserver);
+	Protocol_done();
     }
-    Server_destroy(tcpserver);
     Service_done();
     return rc;
 }

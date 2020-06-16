@@ -46,8 +46,10 @@ static void removeConnection(void *receiver, const void *sender,
 	{
 	    Event_unregister(Connection_closed(self->conn[pos]), self,
 		    removeConnection, 0);
-	    Event_raise(self->clientDisconnected, 0, conn);
+	    ClientConnectionEventArgs cca = { .client = self->conn[pos] };
+	    Event_raise(self->clientDisconnected, 0, &cca);
 	    Connection_destroy(self->conn[pos]);
+	    logmsg(L_INFO, "server: client disconnected");
 	    memmove(self->conn+pos, self->conn+pos+1,
 		    (self->connsize - pos) * sizeof *self->conn);
 	    --self->connsize;
@@ -79,7 +81,8 @@ static void acceptConnection(void *receiver, const void *sender,
     self->conn[self->connsize++] = newconn;
     Event_register(Connection_closed(newconn), self, removeConnection, 0);
     logmsg(L_INFO, "server: client connected");
-    Event_raise(self->clientConnected, 0, newconn);
+    ClientConnectionEventArgs cca = { .client = newconn };
+    Event_raise(self->clientConnected, 0, &cca);
 }
 
 Server *Server_create(int sockfd, char *path)
