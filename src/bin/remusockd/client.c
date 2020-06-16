@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200112L
+
 #include "client.h"
 #include "config.h"
 #include "connection.h"
@@ -54,7 +56,7 @@ Connection *Connection_createTcpClient(const Config *config)
 
 Connection *Connection_createUnixClient(const Config *config)
 {
-    int fd = socket(PF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
     {
 	logmsg(L_ERROR, "client: cannot create socket");

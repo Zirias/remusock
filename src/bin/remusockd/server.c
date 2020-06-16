@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200112L
+
 #include "client.h"
 #include "config.h"
 #include "connection.h"
@@ -101,7 +103,7 @@ Server *Server_create(int sockfd, char *path)
 
 Server *Server_createTcp(const Config *config)
 {
-    int fd = socket(PF_INET6, SOCK_STREAM, 0);
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (fd < 0)
     {
         logmsg(L_ERROR, "server: cannot create socket");
@@ -158,7 +160,7 @@ Server *Server_createTcp(const Config *config)
 
 Server *Server_createUnix(const Config *config)
 {
-    int fd = socket(PF_UNIX, SOCK_STREAM, 0);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
     {
         logmsg(L_ERROR, "server: cannot create socket");
