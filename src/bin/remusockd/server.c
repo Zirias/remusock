@@ -1,5 +1,6 @@
 #include "client.h"
 #include "config.h"
+#include "connection.h"
 #include "event.h"
 #include "eventargs.h"
 #include "log.h"
@@ -20,139 +21,45 @@
 #include <unistd.h>
 
 #define CONNCHUNK 8
-#define CONNBUFSZ 4096
-
-typedef struct SrvConn
-{
-    int fd;
-    int wrbufbusy;
-    uint16_t wrbuflen;
-    char wrbuf[CONNBUFSZ];
-    char rdbuf[CONNBUFSZ];
-} SrvConn;
 
 struct Server
 {
     Event *clientConnected;
     Event *clientDisconnected;
-    Event *dataReceived;
-    Event *dataSent;
-    SrvConn *conn;
+    Connection **conn;
     char *path;
     size_t conncapa;
     size_t connsize;
     int fd;
 };
 
-static SrvConn *findConnection(Server *self, int id, size_t *pos)
+static void removeConnection(void *receiver, const void *sender,
+	const void *args)
 {
-    SrvConn *conn = 0;
-    size_t cp = 0;
-    for (cp = 0; cp < self->connsize; ++cp)
-    {
-	if (self->conn[cp].fd == id)
-	{
-	    conn = self->conn + cp;
-	    if (pos) *pos = cp;
-	    break;
-	}
-    }
-    return conn;
-}
-
-static void removeConnection(Server *self, int id, size_t pos);
-
-static void writeConnection(void *receiver, int id,
-	const void *sender, const void *args)
-{
-    (void)sender;
     (void)args;
 
     Server *self = receiver;
-    size_t pos;
-    SrvConn *conn = findConnection(self, id, &pos);
-    if (!conn)
+    const Connection *conn = sender;
+    for (size_t pos = 0; pos < self->connsize; ++pos)
     {
-	logmsg(L_ERROR, "server: ready to send on unknown connection");
-	return;
-    }
-    if (!conn->wrbuflen)
-    {
-	logmsg(L_ERROR, "server: ready to send with empty buffer");
-	Service_unregisterWrite(id);
-	return;
-    }
-    int rc = write(id, conn->wrbuf, conn->wrbuflen);
-    if (rc > 0)
-    {
-	if (rc < conn->wrbuflen)
+	if (self->conn[pos] == conn)
 	{
-	    memmove(conn->wrbuf+rc, conn->wrbuf, conn->wrbuflen-rc);
+	    Event_unregister(Connection_closed(self->conn[pos]), self,
+		    removeConnection, 0);
+	    Event_raise(self->clientDisconnected, 0, conn);
+	    Connection_destroy(self->conn[pos]);
+	    memmove(self->conn+pos, self->conn+pos+1,
+		    (self->connsize - pos) * sizeof *self->conn);
+	    --self->connsize;
+	    return;
 	}
-	conn->wrbuflen -= rc;
-	Event_raise(self->dataSent, id, 0);
-	if (!conn->wrbuflen) Service_unregisterWrite(id);
-	return;
     }
-
-    logmsg(L_WARNING, "server: error writing to connection");
-    removeConnection(self, id, pos);
+    logmsg(L_ERROR, "server: trying to remove non-existing connection");
 }
 
-static void readConnection(void *receiver, int id,
-	const void *sender, const void *args)
+static void acceptConnection(void *receiver, const void *sender,
+	const void *args)
 {
-    (void)sender;
-    (void)args;
-
-    Server *self = receiver;
-    size_t pos;
-    SrvConn *conn = findConnection(self, id, &pos);
-    if (!conn)
-    {
-	logmsg(L_ERROR, "server: received data on unknown connection");
-	return;
-    }
-
-    int rc = read(id, conn->rdbuf, CONNBUFSZ);
-    if (rc > 0)
-    {
-	DataReceivedEventArgs rargs = {
-	    .buf = conn->rdbuf,
-	    .size = rc
-	};
-	Event_raise(self->dataReceived, id, &rargs);
-	return;
-    }
-
-    if (rc < 0)
-    {
-	logmsg(L_WARNING, "server: error reading from connection");
-    }
-    else
-    {
-	logmsg(L_INFO, "server: client disconnected");
-    }
-    removeConnection(self, id, pos);
-}
-
-static void removeConnection(Server *self, int id, size_t pos)
-{
-    Service_unregisterRead(id);
-    Service_unregisterWrite(id);
-    Event_unregister(Service_readyRead(), self, readConnection, id);
-    Event_unregister(Service_readyWrite(), self, writeConnection, id);
-    close(id);
-    --self->connsize;
-    memmove(self->conn+pos, self->conn+pos+1,
-	    (self->connsize - pos) * sizeof *self->conn);
-    Event_raise(self->clientDisconnected, 0, &id);
-}
-
-static void acceptConnection(void *receiver, int id,
-	const void *sender, const void *args)
-{
-    (void)id;
     (void)sender;
     (void)args;
 
@@ -168,15 +75,11 @@ static void acceptConnection(void *receiver, int id,
 	self->conncapa += CONNCHUNK;
 	self->conn = xrealloc(self->conn, self->conncapa * sizeof *self->conn);
     }
-    SrvConn *newconn = self->conn + self->connsize++;
-    newconn->fd = connfd;
-    newconn->wrbufbusy = 0;
-    newconn->wrbuflen = 0;
-    Event_register(Service_readyRead(), self, readConnection, connfd);
-    Event_register(Service_readyWrite(), self, writeConnection, connfd);
-    Service_registerRead(connfd);
+    Connection *newconn = Connection_create(connfd);
+    self->conn[self->connsize++] = newconn;
+    Event_register(Connection_closed(newconn), self, removeConnection, 0);
     logmsg(L_INFO, "server: client connected");
-    Event_raise(self->clientConnected, 0, &connfd);
+    Event_raise(self->clientConnected, 0, newconn);
 }
 
 Server *Server_create(int sockfd, char *path)
@@ -184,8 +87,6 @@ Server *Server_create(int sockfd, char *path)
     Server *self = xmalloc(sizeof *self);
     self->clientConnected = Event_create(self);
     self->clientDisconnected = Event_create(self);
-    self->dataReceived = Event_create(self);
-    self->dataSent = Event_create(self);
     self->conn = xmalloc(CONNCHUNK * sizeof *self->conn);
     self->path = path;
     self->conncapa = CONNCHUNK;
@@ -279,10 +180,10 @@ Server *Server_createUnix(const Config *config)
             return 0;
         }
 
-        Client *client = Client_createUnix(config);
+        Connection *client = Connection_createUnixClient(config);
         if (client)
         {
-            Client_destroy(client);
+            Connection_destroy(client);
             logfmt(L_ERROR, "server: `%s' is already opened for listening",
                     addr.sun_path);
             close(fd);
@@ -335,71 +236,22 @@ Event *Server_clientDisconnected(Server *self)
     return self->clientDisconnected;
 }
 
-Event *Server_dataReceived(Server *self)
-{
-    return self->dataReceived;
-}
-
-Event *Server_dataSent(Server *self)
-{
-    return self->dataSent;
-}
-
-int Server_writeBuffer(Server *self, int fd, char **buf, uint16_t *sz)
-{
-    SrvConn *conn = findConnection(self, fd, 0);
-    if (!conn)
-    {
-	logmsg(L_ERROR, "server: trying to write to unknown connection");
-	return -1;
-    }
-    if (conn->wrbufbusy) return -1;
-    if (conn->wrbuflen == CONNBUFSZ) return -1;
-    *buf = conn->wrbuf + conn->wrbuflen;
-    *sz = CONNBUFSZ - conn->wrbuflen;
-    conn->wrbufbusy = 1;
-    return 0;
-}
-
-int Server_commitWrite(Server *self, int fd, uint16_t sz)
-{
-    SrvConn *conn = findConnection(self, fd, 0);
-    if (!conn)
-    {
-	logmsg(L_ERROR, "server: trying to write to unknown connection");
-	return -1;
-    }
-    if (!conn->wrbufbusy) return -1;
-    if (conn->wrbuflen + sz > CONNBUFSZ) return -1;
-    conn->wrbuflen += sz;
-    Service_registerWrite(fd);
-    conn->wrbufbusy = 0;
-    return 0;
-}
-
 void Server_destroy(Server *self)
 {
     if (!self) return;
 
     for (size_t pos = 0; pos < self->connsize; ++pos)
     {
-	Service_unregisterRead(self->conn[pos].fd);
-	Service_unregisterWrite(self->conn[pos].fd);
-	Event_unregister(Service_readyRead(), self, readConnection,
-		self->conn[pos].fd);
-	Event_unregister(Service_readyWrite(), self, writeConnection,
-		self->conn[pos].fd);
-	close(self->conn[pos].fd);
+	Event_raise(self->clientDisconnected, 0, self->conn[pos]);
+	Connection_destroy(self->conn[pos]);
     }
+    free(self->conn);
     Service_unregisterRead(self->fd);
     Event_unregister(Service_readyRead(), self, acceptConnection,
 	    self->fd);
-    Event_destroy(self->dataSent);
-    Event_destroy(self->dataReceived);
     Event_destroy(self->clientDisconnected);
     Event_destroy(self->clientConnected);
     close(self->fd);
-    free(self->conn);
     if (self->path)
     {
 	unlink(self->path);

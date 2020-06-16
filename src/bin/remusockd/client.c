@@ -1,7 +1,7 @@
 #include "client.h"
 #include "config.h"
+#include "connection.h"
 #include "log.h"
-#include "util.h"
 
 #include <netdb.h>
 #include <stdlib.h>
@@ -11,19 +11,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-struct Client
-{
-    int fd;
-};
-
-Client *Client_create(int sockfd)
-{
-    Client *self = xmalloc(sizeof *self);
-    self->fd = sockfd;
-    return self;
-}
-
-Client *Client_createTcp(const Config *config)
+Connection *Connection_createTcpClient(const Config *config)
 {
     if (!config->remotehost)
     {
@@ -61,10 +49,10 @@ Client *Client_createTcp(const Config *config)
 	logfmt(L_ERROR, "client: cannot connect to `%s'", config->remotehost);
 	return 0;
     }
-    return Client_create(fd);
+    return Connection_create(fd);
 }
 
-Client *Client_createUnix(const Config *config)
+Connection *Connection_createUnixClient(const Config *config)
 {
     int fd = socket(PF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
@@ -85,13 +73,6 @@ Client *Client_createUnix(const Config *config)
 	return 0;
     }
 
-    return Client_create(fd);
-}
-
-void Client_destroy(Client *self)
-{
-    if (!self) return;
-    close(self->fd);
-    free(self);
+    return Connection_create(fd);
 }
 

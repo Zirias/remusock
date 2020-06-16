@@ -1,7 +1,7 @@
 #ifndef REMUSOCKD_EVENT_H
 #define REMUSOCKD_EVENT_H
 
-typedef void (*EventHandler)(void *receiver, int id,
+typedef void (*EventHandler)(void *receiver,
 	const void *sender, const void *args);
 
 typedef struct Event Event;

@@ -2,11 +2,9 @@
 #define REMUSOCKD_CLIENT_H
 
 typedef struct Config Config;
-typedef struct Client Client;
+typedef struct Connection Connection;
 
-Client *Client_create(int sockfd);
-Client *Client_createTcp(const Config *config);
-Client *Client_createUnix(const Config *config);
-void Client_destroy(Client *self);
+Connection *Connection_createTcpClient(const Config *config);
+Connection *Connection_createUnixClient(const Config *config);
 
 #endif
