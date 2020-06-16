@@ -33,8 +33,7 @@ struct Server
     int fd;
 };
 
-static void removeConnection(void *receiver, const void *sender,
-	const void *args)
+static void removeConnection(void *receiver, void *sender, void *args)
 {
     (void)args;
 
@@ -59,8 +58,7 @@ static void removeConnection(void *receiver, const void *sender,
     logmsg(L_ERROR, "server: trying to remove non-existing connection");
 }
 
-static void acceptConnection(void *receiver, const void *sender,
-	const void *args)
+static void acceptConnection(void *receiver, void *sender, void *args)
 {
     (void)sender;
     (void)args;

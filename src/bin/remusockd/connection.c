@@ -11,47 +11,58 @@
 #include <unistd.h>
 
 #define CONNBUFSZ 4096
+#define NWRITERECS 16
+
+typedef struct WriteRecord
+{
+    const char *wrbuf;
+    uint16_t wrbuflen;
+    uint16_t wrbufpos;
+} WriteRecord;
 
 typedef struct Connection
 {
     Event *closed;
     Event *dataReceived;
     Event *dataSent;
-    const char *wrbuf;
     void *data;
     void (*deleter)(void *);
+    WriteRecord writerecs[NWRITERECS];
     DataReceivedEventArgs args;
     int fd;
-    uint16_t wrbuflen;
-    uint16_t wrbufpos;
+    uint8_t nrecs;
+    uint8_t baserecidx;
     char rdbuf[CONNBUFSZ];
 } Connection;
 
-static void writeConnection(void *receiver, const void *sender,
-	const void *args)
+static void writeConnection(void *receiver, void *sender, void *args)
 {
     (void)sender;
     (void)args;
 
     Connection *self = receiver;
-    if (!self->wrbuflen)
+    if (!self->nrecs)
     {
 	logmsg(L_ERROR, "connection: ready to send with empty buffer");
 	Service_unregisterWrite(self->fd);
 	return;
     }
-    int rc = write(self->fd, self->wrbuf + self->wrbufpos,
-	    self->wrbuflen - self->wrbufpos);
+    WriteRecord *rec = self->writerecs + self->baserecidx;
+    int rc = write(self->fd, rec->wrbuf + rec->wrbufpos,
+	    rec->wrbuflen - rec->wrbufpos);
     if (rc > 0)
     {
-	if (rc < self->wrbuflen - self->wrbufpos)
+	if (rc < rec->wrbuflen - rec->wrbufpos)
 	{
-	    self->wrbufpos += rc;
+	    rec->wrbufpos += rc;
 	    return;
 	}
-	self->wrbuflen = 0;
-	Service_unregisterWrite(self->fd);
-	Event_raise(self->dataSent, 0, 0);
+	if (++self->baserecidx == NWRITERECS) self->baserecidx = 0;
+	if (!--self->nrecs)
+	{
+	    Service_unregisterWrite(self->fd);
+	    Event_raise(self->dataSent, 0, 0);
+	}
 	return;
     }
 
@@ -59,8 +70,7 @@ static void writeConnection(void *receiver, const void *sender,
     Event_raise(self->closed, 0, 0);
 }
 
-static void readConnection(void *receiver, const void *sender,
-	const void *args)
+static void readConnection(void *receiver, void *sender, void *args)
 {
     (void)sender;
     (void)args;
@@ -96,11 +106,12 @@ Connection *Connection_create(int fd)
     self->dataReceived = Event_create(self);
     self->dataSent = Event_create(self);
     self->fd = fd;
-    self->wrbuflen = 0;
     self->data = 0;
     self->deleter = free;
     self->args.buf = self->rdbuf;
     self->args.handling = 0;
+    self->nrecs = 0;
+    self->baserecidx = 0;
     Event_register(Service_readyRead(), self, readConnection, fd);
     Event_register(Service_readyWrite(), self, writeConnection, fd);
     Service_registerRead(fd);
@@ -124,10 +135,12 @@ Event *Connection_dataSent(Connection *self)
 
 int Connection_write(Connection *self, const char *buf, uint16_t sz)
 {
-    if (self->wrbuflen) return -1;
-    self->wrbuflen = sz;
-    self->wrbufpos = 0;
-    self->wrbuf = buf;
+    if (self->nrecs == NWRITERECS) return -1;
+    WriteRecord *rec = self->writerecs +
+	((self->baserecidx + self->nrecs++) % NWRITERECS);
+    rec->wrbuflen = sz;
+    rec->wrbufpos = 0;
+    rec->wrbuf = buf;
     Service_registerWrite(self->fd);
     return 0;
 }
@@ -159,7 +172,7 @@ void Connection_setData(Connection *self, void *data, void (*deleter)(void *))
     }
 }
 
-void *Connection_data(Connection *self)
+void *Connection_data(const Connection *self)
 {
     return self->data;
 }

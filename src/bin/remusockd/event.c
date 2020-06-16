@@ -16,13 +16,13 @@ typedef struct EvHandler
 
 struct Event
 {
-    const void *sender;
+    void *sender;
     EvHandler *handlers;
     size_t size;
     size_t capa;
 };
 
-Event *Event_create(const void *sender)
+Event *Event_create(void *sender)
 {
     Event *self = xmalloc(sizeof *self);
     self->sender = sender;
@@ -70,7 +70,7 @@ void Event_unregister(
     }
 }
 
-void Event_raise(Event *self, int id, const void *args)
+void Event_raise(Event *self, int id, void *args)
 {
     for (size_t i = 0; i < self->size; ++i)
     {
