@@ -6,6 +6,7 @@
 typedef struct DataReceivedEventArgs
 {
     const char *buf;
+    int handling;
     uint16_t size;
 } DataReceivedEventArgs;
 

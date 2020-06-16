@@ -17,10 +17,11 @@ typedef struct Connection
     Event *closed;
     Event *dataReceived;
     Event *dataSent;
+    const char *wrbuf;
+    DataReceivedEventArgs args;
     int fd;
-    int wrbufbusy;
     uint16_t wrbuflen;
-    char wrbuf[CONNBUFSZ];
+    uint16_t wrbufpos;
     char rdbuf[CONNBUFSZ];
 } Connection;
 
@@ -37,14 +38,16 @@ static void writeConnection(void *receiver, const void *sender,
 	Service_unregisterWrite(self->fd);
 	return;
     }
-    int rc = write(self->fd, self->wrbuf, self->wrbuflen);
+    int rc = write(self->fd, self->wrbuf + self->wrbufpos,
+	    self->wrbuflen - self->wrbufpos);
     if (rc > 0)
     {
-	if (rc < self->wrbuflen)
+	if (rc < self->wrbuflen - self->wrbufpos)
 	{
-	    memmove(self->wrbuf+rc, self->wrbuf, self->wrbuflen-rc);
+	    self->wrbufpos += rc;
+	    return;
 	}
-	self->wrbuflen -= rc;
+	self->wrbuflen = 0;
 	Event_raise(self->dataSent, 0, 0);
 	if (!self->wrbuflen) Service_unregisterWrite(self->fd);
 	return;
@@ -61,15 +64,18 @@ static void readConnection(void *receiver, const void *sender,
     (void)args;
 
     Connection *self = receiver;
+    if (self->args.handling)
+    {
+	logmsg(L_WARNING, "server: new data while read buffer still handled");
+	return;
+    }
 
     int rc = read(self->fd, self->rdbuf, CONNBUFSZ);
     if (rc > 0)
     {
-	DataReceivedEventArgs rargs = {
-	    .buf = self->rdbuf,
-	    .size = rc
-	};
-	Event_raise(self->dataReceived, 0, &rargs);
+	self->args.size = rc;
+	Event_raise(self->dataReceived, 0, &self->args);
+	if (self->args.handling) Service_unregisterRead(self->fd);
 	return;
     }
 
@@ -91,8 +97,9 @@ Connection *Connection_create(int fd)
     self->dataReceived = Event_create(self);
     self->dataSent = Event_create(self);
     self->fd = fd;
-    self->wrbufbusy = 0;
     self->wrbuflen = 0;
+    self->args.buf = self->rdbuf;
+    self->args.handling = 0;
     Event_register(Service_readyRead(), self, readConnection, fd);
     Event_register(Service_readyWrite(), self, writeConnection, fd);
     Service_registerRead(fd);
@@ -114,23 +121,21 @@ Event *Connection_dataSent(Connection *self)
     return self->dataSent;
 }
 
-int Connection_writeBuffer(Connection *self, char **buf, uint16_t *sz)
+int Connection_write(Connection *self, const char *buf, uint16_t sz)
 {
-    if (self->wrbufbusy) return -1;
-    if (self->wrbuflen == CONNBUFSZ) return -1;
-    *buf = self->wrbuf + self->wrbuflen;
-    *sz = CONNBUFSZ - self->wrbuflen;
-    self->wrbufbusy = 1;
+    if (self->wrbuflen) return -1;
+    self->wrbuflen = sz;
+    self->wrbufpos = 0;
+    self->wrbuf = buf;
+    Service_registerWrite(self->fd);
     return 0;
 }
 
-int Connection_commitWrite(Connection *self, uint16_t sz)
+int Connection_confirmDataReceived(Connection *self)
 {
-    if (!self->wrbufbusy) return -1;
-    if (self->wrbuflen + sz > CONNBUFSZ) return -1;
-    self->wrbuflen += sz;
-    Service_registerWrite(self->fd);
-    self->wrbufbusy = 0;
+    if (!self->args.handling) return -1;
+    self->args.handling = 0;
+    Service_registerRead(self->fd);
     return 0;
 }
 
