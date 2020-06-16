@@ -170,14 +170,17 @@ int Service_run(void)
 	    logmsg(L_ERROR, "pselect() failed");
 	    break;
 	}
-	for (int i = 0; src > 0 && i < nfds; ++i)
+	if (w) for (int i = 0; src > 0 && i < nfds; ++i)
 	{
-	    if (w && FD_ISSET(i, w))
+	    if (FD_ISSET(i, w))
 	    {
 		--src;
 		Event_raise(readyWrite, i, 0);
 	    }
-	    if (r && FD_ISSET(i, r))
+	}
+	if (r) for (int i = 0; src > 0 && i < nfds; ++i)
+	{
+	    if (FD_ISSET(i, r))
 	    {
 		--src;
 		Event_raise(readyRead, i, 0);

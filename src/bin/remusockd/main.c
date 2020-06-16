@@ -2,7 +2,6 @@
 #include "daemon.h"
 #include "log.h"
 #include "protocol.h"
-#include "server.h"
 #include "service.h"
 #include "syslog.h"
 
