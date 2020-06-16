@@ -124,10 +124,11 @@ Server *Server_createTcp(const Config *config)
     hints.ai_family = AF_INET6;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE|AI_ADDRCONFIG|AI_V4MAPPED|AI_NUMERICSERV;
-    struct addrinfo *res;
+    struct addrinfo *res = 0;
     char portstr[6];
     snprintf(portstr, 6, "%d", config->port);
-    if (getaddrinfo(config->bindaddr, portstr, &hints, &res) < 0)
+    if (getaddrinfo(config->bindaddr, portstr, &hints, &res) < 0
+	    || !res)
     {
         logmsg(L_ERROR, "server: cannot get address info");
         close(fd);
