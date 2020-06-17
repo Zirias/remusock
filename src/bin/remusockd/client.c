@@ -22,9 +22,9 @@ Connection *Connection_createTcpClient(const Config *config)
     }
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET6;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_ADDRCONFIG|AI_ALL|AI_V4MAPPED|AI_NUMERICSERV;
+    hints.ai_flags = AI_ADDRCONFIG|AI_NUMERICSERV;
     char portstr[6];
     snprintf(portstr, 6, "%d", config->port);
     struct addrinfo *res, *res0;
@@ -36,6 +36,7 @@ Connection *Connection_createTcpClient(const Config *config)
     int fd = -1;
     for (res = res0; res; res = res->ai_next)
     {
+	if (res->ai_family != AF_INET && res->ai_family != AF_INET6) continue;
 	fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 	if (fd < 0) continue;
 	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0)
