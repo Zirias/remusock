@@ -44,6 +44,7 @@ typedef struct TcpProtoData
     uint16_t capa;
     uint16_t rdexpect;
     uint16_t clientno;
+    uint8_t nwriteconns;
     uint8_t rdbufpos;
     char wrbuf[PRDBUFSZ];
     char rdbuf[PRDBUFSZ];
@@ -57,6 +58,7 @@ static TcpProtoData *TcpProtoData_create(void)
     self->size = 0;
     self->capa = LISTCHUNK;
     self->rdexpect = 0;
+    self->nwriteconns = 0;
     self->rdbufpos = 0;
     return self;
 }
@@ -134,6 +136,19 @@ static void TcpProtoData_delete(void *list)
     }
     free(self->clients);
     free(self);
+}
+
+static void sockDataSent(void *receiver, void *sender, void *args)
+{
+    (void)sender;
+    (void)receiver;
+
+    Connection *tcpconn = args;
+    TcpProtoData *prdat = Connection_data(tcpconn);
+    if (!--prdat->nwriteconns)
+    {
+	Connection_confirmDataReceived(tcpconn);
+    }
 }
 
 static void tcpDataSent(void *receiver, void *sender, void *args)
@@ -263,6 +278,9 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 					Connection_dataReceived(sockclient),
 					0, sockDataReceived, 0);
 				Event_register(
+					Connection_dataSent(sockclient),
+					0, sockDataSent, 0);
+				Event_register(
 					Connection_closed(sockclient),
 					0, sockConnectionLost, 0);
 			    }
@@ -311,8 +329,10 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    tcpconn, prdat->clientno);
 		    if (client)
 		    {
+			++prdat->nwriteconns;
+			dra->handling = 1;
 			Connection_write(client->sockconn, dra->buf + dpos,
-				chunksz, 0);
+				chunksz, tcpconn);
 		    }
 		    dpos += chunksz;
 		    prdat->rdexpect -= chunksz;
@@ -369,6 +389,7 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
 	return;
     }
     Event_register(Connection_dataReceived(client), 0, sockDataReceived, 0);
+    Event_register(Connection_dataSent(client), 0, sockDataSent, 0);
     TcpProtoData *prdat = Connection_data(tcpclient);
     uint16_t clientno = registerConnection(tcpclient, client);
     prdat->wrbuf[0] = 'h';
@@ -383,6 +404,7 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
     (void)sender;
 
     Connection *client = args;
+    Event_unregister(Connection_dataSent(client), 0, sockDataSent, 0);
     Event_unregister(Connection_dataReceived(client), 0, sockDataReceived, 0);
     ClientSpec *clspec = Connection_data(client);
     if (clspec)
