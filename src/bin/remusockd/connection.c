@@ -50,6 +50,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
     WriteRecord *rec = self->writerecs + self->baserecidx;
     int rc = write(self->fd, rec->wrbuf + rec->wrbufpos,
 	    rec->wrbuflen - rec->wrbufpos);
+    DataSentEventArgs dsa = { 0 };
     if (rc > 0)
     {
 	if (rc < rec->wrbuflen - rec->wrbufpos)
@@ -57,11 +58,15 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	    rec->wrbufpos += rc;
 	    return;
 	}
+	else dsa.buf = rec->wrbuf;
 	if (++self->baserecidx == NWRITERECS) self->baserecidx = 0;
 	if (!--self->nrecs)
 	{
 	    Service_unregisterWrite(self->fd);
-	    Event_raise(self->dataSent, 0, 0);
+	}
+	if (dsa.buf)
+	{
+	    Event_raise(self->dataSent, 0, &dsa);
 	}
 	return;
     }

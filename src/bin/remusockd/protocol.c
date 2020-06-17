@@ -23,7 +23,7 @@ static Connection *tcpclient;
 typedef struct ClientSpec
 {
     Connection *sockconn;
-    uint16_t clientno;
+    const void *writereq;
 } ClientSpec;
 
 typedef struct TcpProtoData
@@ -67,7 +67,7 @@ static uint16_t TcpProtoData_addClient(TcpProtoData *self,
 		self->capa * sizeof *self->clients);
     }
     self->clients[pos].sockconn = sockconn;
-    self->clients[pos].clientno = 0xffff;
+    self->clients[pos].writereq = 0;
     if (pos == self->size) ++self->size;
     return pos;
 }
@@ -89,17 +89,20 @@ static ClientSpec *TcpProtoData_findClient(TcpProtoData *self,
 static void tcpDataSent(void *receiver, void *sender, void *args)
 {
     (void)receiver;
-    (void)args;
 
     const Connection *tcpconn = sender;
     TcpProtoData *prdat = Connection_data(tcpconn);
     if (prdat)
     {
+	DataSentEventArgs *dsa = args;
 	for (uint16_t pos = 0; pos < prdat->size; ++pos)
 	{
-	    if (prdat->clients[pos].sockconn)
+	    if (prdat->clients[pos].sockconn
+		    && prdat->clients[pos].writereq == dsa->buf)
 	    {
+		prdat->clients[pos].writereq = 0;
 		Connection_confirmDataReceived(prdat->clients[pos].sockconn);
+		break;
 	    }
 	}
     }
@@ -184,6 +187,7 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
 	    prdat->wrbuf[4] = dra->size & 0xff;
 	    Connection_write(tcpclient, prdat->wrbuf, 5);
 	    Connection_write(tcpclient, dra->buf, dra->size);
+	    client->writereq = dra->buf;
 	}
     }
 }
