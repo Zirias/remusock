@@ -1,4 +1,5 @@
 #include "config.h"
+#include "log.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -11,7 +12,7 @@
 
 static void usage(char *prgname)
 {
-    fprintf(stderr, "Usage: %s [-cf]\n"
+    fprintf(stderr, "Usage: %s [-cfv]\n"
 	    "\t\t[-b address] [-p pidfile] [-r remotehost] socket port\n",
 	    prgname);
     fputs("\n\t-b address     when listening, only bind to this address\n"
@@ -20,6 +21,7 @@ static void usage(char *prgname)
 	    "\t-f             run in foreground\n"
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
+	    "\t-v             verbose logging output\n"
 	    "\n"
 	    "\tsocket         unix domain socket to open\n"
 	    "\tport           TCP port to connect to or listen on\n\n",
@@ -98,6 +100,10 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 			{
 			    ++needremotehost;
 			}
+			break;
+
+		    case 'v':
+			setMaxLogLevel(L_DEBUG);
 			break;
 
 		    default:

@@ -41,6 +41,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
     (void)sender;
     (void)args;
 
+    logmsg(L_DEBUG, "connection: ready to write");
     Connection *self = receiver;
     if (!self->nrecs)
     {
@@ -81,6 +82,7 @@ static void readConnection(void *receiver, void *sender, void *args)
     (void)sender;
     (void)args;
 
+    logmsg(L_DEBUG, "connection: ready to read");
     Connection *self = receiver;
     if (self->args.handling)
     {
@@ -94,7 +96,11 @@ static void readConnection(void *receiver, void *sender, void *args)
     {
 	self->args.size = rc;
 	Event_raise(self->dataReceived, 0, &self->args);
-	if (self->args.handling) Service_unregisterRead(self->fd);
+	if (self->args.handling)
+	{
+	    logmsg(L_DEBUG, "connection: blocking reads");
+	    Service_unregisterRead(self->fd);
+	}
 	return;
     }
 
@@ -155,6 +161,7 @@ int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
 int Connection_confirmDataReceived(Connection *self)
 {
     if (!self->args.handling) return -1;
+    logmsg(L_DEBUG, "connection: unblocking reads");
     self->args.handling = 0;
     Service_registerRead(self->fd);
     return 0;

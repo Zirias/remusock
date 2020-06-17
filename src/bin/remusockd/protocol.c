@@ -3,6 +3,7 @@
 #include "connection.h"
 #include "event.h"
 #include "eventargs.h"
+#include "log.h"
 #include "protocol.h"
 #include "server.h"
 #include "service.h"
@@ -212,9 +213,11 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 {
     (void)receiver;
 
+    logmsg(L_DEBUG, "protocol: received TCP data");
     Connection *tcpconn = sender;
     DataReceivedEventArgs *dra = args;
     TcpProtoData *prdat = Connection_data(tcpconn);
+    logfmt(L_DEBUG, "protocol: in state %d", prdat->state);
     uint16_t dpos = 0;
     while (dpos < dra->size)
     {
@@ -275,22 +278,21 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    break;
 			case 'b':
 			    client = connectionAt(tcpconn, clientno);
-			    if (client)
+			    if (!client) goto error;
+			    sockclient = client->sockconn;
+			    unregisterConnection(tcpconn, sockclient);
+			    if (sockserver)
 			    {
-				sockclient = client->sockconn;
-				unregisterConnection(tcpconn, sockclient);
-				if (sockserver)
-				{
-				    Connection_close(sockclient);
-				}
-				else
-				{
-				    Connection_destroy(sockclient);
-				}
+				Connection_close(sockclient);
+			    }
+			    else
+			    {
+				Connection_destroy(sockclient);
 			    }
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case 'd':
+			    if (!connectionAt(tcpconn, clientno)) goto error;
 			    prdat->clientno = clientno;
 			    prdat->rdexpect =
 				(prdat->rdbuf[3] << 8) | prdat->rdbuf[4];
@@ -322,6 +324,7 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
     return;
 
 error:
+    logmsg(L_DEBUG, "protocol error");
     Connection_close(tcpconn);
 }
 
@@ -336,7 +339,7 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
 	if (tcpclient)
 	{
 	    Event_register(Connection_dataSent(client), 0, busySent, 0);
-	    Connection_write(client, "busy.\n", 6, 0);
+	    Connection_write(client, "busy.\n", 6, client);
 	    return;
 	}
 	tcpclient = client;

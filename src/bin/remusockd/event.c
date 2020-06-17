@@ -76,6 +76,7 @@ void Event_raise(Event *self, int id, void *args)
     {
 	if (self->handlers[i].id == id)
 	{
+	    if (!args && id) args = &id;
 	    self->handlers[i].handler(self->handlers[i].receiver,
 		    self->sender, args);
 	}

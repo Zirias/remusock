@@ -31,7 +31,8 @@ struct Server
     char *path;
     size_t conncapa;
     size_t connsize;
-    int fd;
+    uint8_t nsocks;
+    int fd[MAXSOCKS];
 };
 
 static void removeConnection(void *receiver, void *sender, void *args)
@@ -64,7 +65,8 @@ static void acceptConnection(void *receiver, void *sender, void *args)
     (void)args;
 
     Server *self = receiver;
-    int connfd = accept(self->fd, 0, 0);
+    int *sockfd = args;
+    int connfd = accept(*sockfd, 0, 0);
     if (connfd < 0)
     {
 	logmsg(L_WARNING, "server: failed to accept connection");
@@ -82,8 +84,9 @@ static void acceptConnection(void *receiver, void *sender, void *args)
     Event_raise(self->clientConnected, 0, newconn);
 }
 
-Server *Server_create(int sockfd, char *path)
+Server *Server_create(uint8_t nsocks, int *sockfd, char *path)
 {
+    if (nsocks < 1 || nsocks > MAXSOCKS) return 0;
     Server *self = xmalloc(sizeof *self);
     self->clientConnected = Event_create(self);
     self->clientDisconnected = Event_create(self);
@@ -91,67 +94,75 @@ Server *Server_create(int sockfd, char *path)
     self->path = path;
     self->conncapa = CONNCHUNK;
     self->connsize = 0;
-    self->fd = sockfd;
-    Event_register(Service_readyRead(), self, acceptConnection, sockfd);
-    Service_registerRead(sockfd);
+    self->nsocks = nsocks;
+    memcpy(self->fd, sockfd, nsocks * sizeof *sockfd);
+    for (uint8_t i = 0; i < nsocks; ++i)
+    {
+	Event_register(Service_readyRead(), self, acceptConnection, sockfd[i]);
+	Service_registerRead(sockfd[i]);
+    }
 
     return self;
 }
 
 Server *Server_createTcp(const Config *config)
 {
-    int fd = socket(AF_INET6, SOCK_STREAM, 0);
-    if (fd < 0)
-    {
-        logmsg(L_ERROR, "server: cannot create socket");
-        return 0;
-    }
-
-    int opt_true = 1;
-    int opt_false = 0;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-                &opt_true, sizeof opt_true) < 0
-            || setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
-                &opt_false, sizeof opt_false) < 0)
-    {
-        logmsg(L_ERROR, "server: cannot set socket options");
-        close(fd);
-        return 0;
-    }
+    int fd[MAXSOCKS];
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET6;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE|AI_ADDRCONFIG|AI_V4MAPPED|AI_NUMERICSERV;
-    struct addrinfo *res = 0;
+    hints.ai_flags = AI_PASSIVE|AI_ADDRCONFIG|AI_NUMERICSERV;
     char portstr[6];
     snprintf(portstr, 6, "%d", config->port);
-    if (getaddrinfo(config->bindaddr, portstr, &hints, &res) < 0
-	    || !res)
+    struct addrinfo *res0 = 0;
+    if (getaddrinfo(config->bindaddr, portstr, &hints, &res0) < 0 || !res0)
     {
         logmsg(L_ERROR, "server: cannot get address info");
-        close(fd);
         return 0;
     }
-
-    if (bind(fd, res->ai_addr, res->ai_addrlen) < 0)
+    int nsocks = 0;
+    int opt_true = 1;
+    for (struct addrinfo *res = res0; res && nsocks < MAXSOCKS;
+	    res = res->ai_next)
     {
-        logmsg(L_ERROR, "server: cannot bind to specified address");
-        freeaddrinfo(res);
-        close(fd);
-        return 0;
+	if (res->ai_family != AF_INET && res->ai_family != AF_INET6) continue;
+	fd[nsocks] = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	if (fd[nsocks] < 0)
+	{
+	    logmsg(L_ERROR, "server: cannot create socket");
+	    continue;
+	}
+	if (setsockopt(fd[nsocks], SOL_SOCKET, SO_REUSEADDR,
+		    &opt_true, sizeof opt_true) < 0)
+	{
+	    logmsg(L_ERROR, "server: cannot set socket option");
+	    close(fd[nsocks]);
+	    continue;
+	}
+	if (bind(fd[nsocks], res->ai_addr, res->ai_addrlen) < 0)
+	{
+	    logmsg(L_ERROR, "server: cannot bind to specified address");
+	    close(fd[nsocks]);
+	    continue;
+	}
+	if (listen(fd[nsocks], 8) < 0)
+	{   
+	    logmsg(L_ERROR, "server: cannot listen on socket");
+	    close(fd[nsocks]);
+	    continue;
+	}
+	++nsocks;
     }
-    freeaddrinfo(res);
+    freeaddrinfo(res0);
+    if (!nsocks)
+    {
+	logmsg(L_ERROR, "server: could not create any socket");
+	return 0;
+    }
     
-    if (listen(fd, 8) < 0)
-    {   
-        logmsg(L_ERROR, "server: cannot listen on socket");
-        close(fd);
-        return 0;
-    }   
-
-    Server *self = Server_create(fd, 0);
+    Server *self = Server_create(nsocks, fd, 0);
     return self;
 }
 
@@ -223,7 +234,7 @@ Server *Server_createUnix(const Config *config)
         return 0;
     }
 
-    Server *self = Server_create(fd, copystr(addr.sun_path));
+    Server *self = Server_create(1, &fd, copystr(addr.sun_path));
     return self;
 }
 
@@ -247,12 +258,15 @@ void Server_destroy(Server *self)
 	Connection_destroy(self->conn[pos]);
     }
     free(self->conn);
-    Service_unregisterRead(self->fd);
-    Event_unregister(Service_readyRead(), self, acceptConnection,
-	    self->fd);
+    for (uint8_t i = 0; i < self->nsocks; ++i)
+    {
+	Service_unregisterRead(self->fd[i]);
+	Event_unregister(Service_readyRead(), self, acceptConnection,
+		self->fd[i]);
+	close(self->fd[i]);
+    }
     Event_destroy(self->clientDisconnected);
     Event_destroy(self->clientConnected);
-    close(self->fd);
     if (self->path)
     {
 	unlink(self->path);
