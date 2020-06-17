@@ -31,6 +31,7 @@ typedef struct Connection
     WriteRecord writerecs[NWRITERECS];
     DataReceivedEventArgs args;
     int fd;
+    uint8_t deleteScheduled;
     uint8_t nrecs;
     uint8_t baserecidx;
     char rdbuf[CONNBUFSZ];
@@ -111,6 +112,16 @@ static void readConnection(void *receiver, void *sender, void *args)
     Event_raise(self->closed, 0, 0);
 }
 
+static void deleteConnection(void *receiver, void *sender, void *args)
+{
+    (void)sender;
+    (void)args;
+
+    Connection *self = receiver;
+    self->deleteScheduled = 2;
+    Connection_destroy(self);
+}
+
 Connection *Connection_create(int fd)
 {
     Connection *self = xmalloc(sizeof *self);
@@ -122,6 +133,7 @@ Connection *Connection_create(int fd)
     self->deleter = 0;
     self->args.buf = self->rdbuf;
     self->args.handling = 0;
+    self->deleteScheduled = 0;
     self->nrecs = 0;
     self->baserecidx = 0;
     Event_register(Service_readyRead(), self, readConnection, fd);
@@ -184,12 +196,27 @@ void *Connection_data(const Connection *self)
     return self->data;
 }
 
+void Connection_deleteLater(Connection *self)
+{
+    if (!self) return;
+    if (!self->deleteScheduled)
+    {
+	Event_register(Service_eventsDone(), self, deleteConnection, 0);
+	self->deleteScheduled = 1;
+    }
+}
+
 void Connection_destroy(Connection *self)
 {
     if (!self) return;
+    if (self->deleteScheduled == 1) return;
 
     Service_unregisterRead(self->fd);
     Service_unregisterWrite(self->fd);
+    if (self->deleteScheduled)
+    {
+	Event_unregister(Service_eventsDone(), self, deleteConnection, 0);
+    }
     Event_unregister(Service_readyRead(), self, readConnection, self->fd);
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
     close(self->fd);

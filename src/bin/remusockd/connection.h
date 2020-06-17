@@ -15,6 +15,7 @@ int Connection_confirmDataReceived(Connection *self);
 void Connection_close(Connection *self);
 void Connection_setData(Connection *self, void *data, void (*deleter)(void *));
 void *Connection_data(const Connection *self);
+void Connection_deleteLater(Connection *self);
 void Connection_destroy(Connection *self);
 
 #endif

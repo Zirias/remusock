@@ -40,19 +40,17 @@ static void removeConnection(void *receiver, void *sender, void *args)
     (void)args;
 
     Server *self = receiver;
-    const Connection *conn = sender;
+    Connection *conn = sender;
     for (size_t pos = 0; pos < self->connsize; ++pos)
     {
 	if (self->conn[pos] == conn)
 	{
-	    Event_unregister(Connection_closed(self->conn[pos]), self,
-		    removeConnection, 0);
-	    Event_raise(self->clientDisconnected, 0, self->conn[pos]);
-	    Connection_destroy(self->conn[pos]);
+	    Connection_deleteLater(conn);
 	    logmsg(L_INFO, "server: client disconnected");
 	    memmove(self->conn+pos, self->conn+pos+1,
 		    (self->connsize - pos) * sizeof *self->conn);
 	    --self->connsize;
+	    Event_raise(self->clientDisconnected, 0, conn);
 	    return;
 	}
     }

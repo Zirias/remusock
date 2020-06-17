@@ -16,6 +16,15 @@
 #define LISTCHUNK 8
 #define PRDBUFSZ 16
 
+#define CMD_PING    0x3f
+#define CMD_PONG    0x21
+#define CMD_HELLO   0x48
+#define CMD_BYE	    0x42
+#define	CMD_DATA    0x44
+
+#define PINGTICKS 18
+#define CLOSETICKS 20
+
 static const Config *cfg;
 
 static Server *sockserver;
@@ -44,6 +53,7 @@ typedef struct TcpProtoData
     uint16_t capa;
     uint16_t rdexpect;
     uint16_t clientno;
+    uint8_t idleTicks;
     uint8_t nwriteconns;
     uint8_t rdbufpos;
     char wrbuf[PRDBUFSZ];
@@ -58,6 +68,7 @@ static TcpProtoData *TcpProtoData_create(void)
     self->size = 0;
     self->capa = LISTCHUNK;
     self->rdexpect = 0;
+    self->idleTicks = 0;
     self->nwriteconns = 0;
     self->rdbufpos = 0;
     return self;
@@ -159,6 +170,27 @@ static void tcpDataSent(void *receiver, void *sender, void *args)
     Connection_confirmDataReceived(args);
 }
 
+static void tcpTick(void *receiver, void *sender, void *args)
+{
+    (void)sender;
+    (void)args;
+
+    Connection *tcpconn = receiver;
+    TcpProtoData *prdat = Connection_data(tcpconn);
+    uint8_t ticks = ++prdat->idleTicks;
+    if (ticks == CLOSETICKS)
+    {
+	logmsg(L_INFO, "protocol: closing unresponsive TCP connection");
+	Connection_close(tcpconn);
+    }
+    else if (ticks == PINGTICKS)
+    {
+	logmsg(L_DEBUG, "protocol: pinging idle TCP connection");
+	prdat->wrbuf[0] = CMD_PING;
+	Connection_write(tcpconn, prdat->wrbuf, 1, 0);
+    }
+}
+
 static void sockConnectionLost(void *receiver, void *sender, void *args)
 {
     (void)receiver;
@@ -169,15 +201,12 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
     if (client)
     {
 	TcpProtoData *prdat = Connection_data(client->tcpconn);
-	prdat->wrbuf[0] = 'b';
+	prdat->wrbuf[0] = CMD_BYE;
 	prdat->wrbuf[1] = client->clientno >> 8;
 	prdat->wrbuf[2] = client->clientno & 0xff;
 	Connection_write(client->tcpconn, prdat->wrbuf, 3, 0);
     }
-    if (!sockserver)
-    {
-	Connection_destroy(sock);
-    }
+    Connection_deleteLater(sock);
 }
 
 static void sockDataReceived(void *receiver, void *sender, void *args)
@@ -191,26 +220,13 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
     {
 	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
 	dra->handling = 1;
-	prdat->wrbuf[0] = 'd';
+	prdat->wrbuf[0] = CMD_DATA;
 	prdat->wrbuf[1] = clspec->clientno >> 8;
 	prdat->wrbuf[2] = clspec->clientno & 0xff;
 	prdat->wrbuf[3] = dra->size >> 8;
 	prdat->wrbuf[4] = dra->size & 0xff;
 	Connection_write(clspec->tcpconn, prdat->wrbuf, 5, 0);
 	Connection_write(clspec->tcpconn, dra->buf, dra->size, sockconn);
-    }
-}
-
-static void tcpConnectionLost(void *receiver, void *sender, void *args)
-{
-    (void)receiver;
-    (void)args;
-
-    if (tcpclient == sender)
-    {
-	Connection_destroy(tcpclient);
-	tcpclient = 0;
-	Service_quit();
     }
 }
 
@@ -233,6 +249,7 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
     DataReceivedEventArgs *dra = args;
     TcpProtoData *prdat = Connection_data(tcpconn);
     logfmt(L_DEBUG, "protocol: in state %d", prdat->state);
+    prdat->idleTicks = 0;
     uint16_t dpos = 0;
     while (dpos < dra->size)
     {
@@ -241,14 +258,22 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 	    case TPS_DEFAULT:
 		switch (dra->buf[dpos])
 		{
-		    case 'h':
+		    case CMD_PING:
+			prdat->wrbuf[0] = CMD_PONG;
+			Connection_write(tcpconn, prdat->wrbuf, 1, 0);
+			++dpos;
+			continue;
+		    case CMD_PONG:
+			++dpos;
+			continue;
+		    case CMD_HELLO:
 			if (sockserver) goto error;
 			prdat->rdexpect = 2;
 			break;
-		    case 'b':
+		    case CMD_BYE:
 			prdat->rdexpect = 2;
 			break;
-		    case 'd':
+		    case CMD_DATA:
 			prdat->rdexpect = 4;
 			break;
 		    default:
@@ -268,7 +293,7 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 		    ClientSpec *client;
 		    switch (prdat->rdbuf[0])
 		    {
-			case 'h':
+			case CMD_HELLO:
 			    sockclient = Connection_createUnixClient(cfg);
 			    if (sockclient &&
 				    registerConnectionAt(tcpconn,
@@ -287,14 +312,14 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    else
 			    {
 				if (sockclient) Connection_destroy(sockclient);
-				prdat->wrbuf[0] = 'b';
+				prdat->wrbuf[0] = CMD_BYE;
 				prdat->wrbuf[1] = prdat->rdbuf[1];
 				prdat->wrbuf[2] = prdat->rdbuf[2];
 				Connection_write(tcpconn, prdat->wrbuf, 3, 0);
 			    }
 			    prdat->state = TPS_DEFAULT;
 			    break;
-			case 'b':
+			case CMD_BYE:
 			    client = connectionAt(tcpconn, clientno);
 			    if (!client) goto error;
 			    sockclient = client->sockconn;
@@ -309,7 +334,7 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    }
 			    prdat->state = TPS_DEFAULT;
 			    break;
-			case 'd':
+			case CMD_DATA:
 			    if (!connectionAt(tcpconn, clientno)) goto error;
 			    prdat->clientno = clientno;
 			    prdat->rdexpect =
@@ -348,6 +373,21 @@ error:
     Connection_close(tcpconn);
 }
 
+static void tcpConnectionLost(void *receiver, void *sender, void *args)
+{
+    (void)receiver;
+    (void)args;
+
+    Connection *conn = sender;
+    Event_unregister(Service_tick(), conn, tcpTick, 0);
+    if (tcpclient == conn)
+    {
+	tcpclient = 0;
+	if (!tcpserver) Service_quit();
+    }
+    Connection_deleteLater(conn);
+}
+
 static void tcpClientConnected(void *receiver, void *sender, void *args)
 {
     (void)receiver;
@@ -365,16 +405,10 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
 	tcpclient = client;
     }
     Connection_setData(client, TcpProtoData_create(), TcpProtoData_delete);
+    Event_register(Connection_closed(client), 0, tcpConnectionLost, 0);
     Event_register(Connection_dataReceived(client), 0, tcpDataReceived, 0);
     Event_register(Connection_dataSent(client), 0, tcpDataSent, 0);
-}
-
-static void tcpClientDisconnected(void *receiver, void *sender, void *args)
-{
-    (void)receiver;
-    (void)sender;
-
-    if (tcpclient == args) tcpclient = 0;
+    Event_register(Service_tick(), client, tcpTick, 0);
 }
 
 static void sockClientConnected(void *receiver, void *sender, void *args)
@@ -392,7 +426,7 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     Event_register(Connection_dataSent(client), 0, sockDataSent, 0);
     TcpProtoData *prdat = Connection_data(tcpclient);
     uint16_t clientno = registerConnection(tcpclient, client);
-    prdat->wrbuf[0] = 'h';
+    prdat->wrbuf[0] = CMD_HELLO;
     prdat->wrbuf[1] = clientno >> 8;
     prdat->wrbuf[2] = clientno & 0xff;
     Connection_write(tcpclient, prdat->wrbuf, 3, 0);
@@ -404,13 +438,11 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
     (void)sender;
 
     Connection *client = args;
-    Event_unregister(Connection_dataSent(client), 0, sockDataSent, 0);
-    Event_unregister(Connection_dataReceived(client), 0, sockDataReceived, 0);
     ClientSpec *clspec = Connection_data(client);
     if (clspec)
     {
 	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
-	prdat->wrbuf[0] = 'b';
+	prdat->wrbuf[0] = CMD_BYE;
 	prdat->wrbuf[1] = clspec->clientno >> 8;
 	prdat->wrbuf[2] = clspec->clientno & 0xff;
 	Connection_write(tcpclient, prdat->wrbuf, 3, 0);
@@ -446,6 +478,7 @@ int Protocol_init(const Config *config)
 		tcpDataReceived, 0);
 	Event_register(Connection_dataSent(tcpclient), 0,
 		tcpDataSent, 0);
+	Event_register(Service_tick(), tcpclient, tcpTick, 0);
 	Connection_setData(tcpclient, TcpProtoData_create(),
 		TcpProtoData_delete);
     }
@@ -460,9 +493,8 @@ int Protocol_init(const Config *config)
 	}
 	Event_register(Server_clientConnected(tcpserver), 0,
 		tcpClientConnected, 0);
-	Event_register(Server_clientDisconnected(tcpserver), 0,
-		tcpClientDisconnected, 0);
     }
+    Service_setTickInterval(5000);
     return 0;
 }
 
