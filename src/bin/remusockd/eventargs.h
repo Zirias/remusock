@@ -17,9 +17,4 @@ typedef struct DataReceivedEventArgs
     uint16_t size;
 } DataReceivedEventArgs;
 
-typedef struct DataSentEventArgs
-{
-    const void *buf;
-} DataSentEventArgs;
-
 #endif

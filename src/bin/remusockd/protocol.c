@@ -22,13 +22,14 @@ static Connection *tcpclient;
 
 typedef struct ClientSpec
 {
+    Connection *tcpconn;
     Connection *sockconn;
-    const void *writereq;
+    uint16_t clientno;
 } ClientSpec;
 
 typedef struct TcpProtoData
 {
-    ClientSpec *clients;
+    ClientSpec **clients;
     uint16_t size;
     uint16_t capa;
     char wrbuf[PRWRBUFSZ];
@@ -43,69 +44,65 @@ static TcpProtoData *TcpProtoData_create(void)
     return self;
 }
 
+static uint16_t registerConnection(Connection *tcpconn, Connection *sockconn)
+{
+    TcpProtoData *prdat = Connection_data(tcpconn);
+    uint16_t pos;
+    for (pos = 0; pos < prdat->size; ++pos)
+    {
+	if (!prdat->clients[pos]) break;
+    }
+    if (pos == prdat->capa)
+    {
+	if ((uint16_t)(prdat->capa + LISTCHUNK) < prdat->capa) return 0xffff;
+	prdat->capa += LISTCHUNK;
+	prdat->clients = xrealloc(prdat->clients,
+		prdat->capa * sizeof *prdat->clients);
+    }
+    ClientSpec *clspec = xmalloc(sizeof *clspec);
+    clspec->tcpconn = tcpconn;
+    clspec->sockconn = sockconn;
+    clspec->clientno = pos;
+    prdat->clients[pos] = clspec;
+    Connection_setData(sockconn, clspec, 0);
+    if (pos == prdat->size) ++prdat->size;
+    return pos;
+}
+
+static void unregisterConnection(Connection *tcpconn, Connection *sockconn)
+{
+    TcpProtoData *prdat = Connection_data(tcpconn);
+    ClientSpec *clspec = Connection_data(sockconn);
+    if (prdat && clspec)
+    {
+	Connection_setData(sockconn, 0, 0);
+	prdat->clients[clspec->clientno] = 0;
+	free(clspec);
+    }
+}
+
 static void TcpProtoData_delete(void *list)
 {
     if (!list) return;
     TcpProtoData *self = list;
+    for (uint16_t pos = 0; pos < self->size; ++pos)
+    {
+	if (self->clients[pos])
+	{
+	    unregisterConnection(self->clients[pos]->tcpconn,
+		    self->clients[pos]->sockconn);
+	}
+    }
     free(self->clients);
     free(self);
 }
 
-static uint16_t TcpProtoData_addClient(TcpProtoData *self,
-	Connection *sockconn)
-{
-    uint16_t pos;
-    for (pos = 0; pos < self->size; ++pos)
-    {
-	if (!self->clients[pos].sockconn) break;
-    }
-    if (pos == self->capa)
-    {
-	if ((uint16_t)(self->capa + LISTCHUNK) < self->capa) return 0xffff;
-	self->capa += LISTCHUNK;
-	self->clients = xrealloc(self->clients,
-		self->capa * sizeof *self->clients);
-    }
-    self->clients[pos].sockconn = sockconn;
-    self->clients[pos].writereq = 0;
-    if (pos == self->size) ++self->size;
-    return pos;
-}
-
-static ClientSpec *TcpProtoData_findClient(TcpProtoData *self,
-	const Connection *sockconn, uint16_t *clientno)
-{
-    for (uint16_t pos = 0; pos < self->size; ++pos)
-    {
-	if (self->clients[pos].sockconn == sockconn)
-	{
-	    if (clientno) *clientno = pos;
-	    return self->clients + pos;
-	}
-    }
-    return 0;
-}
-
 static void tcpDataSent(void *receiver, void *sender, void *args)
 {
+    (void)sender;
     (void)receiver;
 
-    const Connection *tcpconn = sender;
-    TcpProtoData *prdat = Connection_data(tcpconn);
-    if (prdat)
-    {
-	DataSentEventArgs *dsa = args;
-	for (uint16_t pos = 0; pos < prdat->size; ++pos)
-	{
-	    if (prdat->clients[pos].sockconn
-		    && prdat->clients[pos].writereq == dsa->buf)
-	    {
-		prdat->clients[pos].writereq = 0;
-		Connection_confirmDataReceived(prdat->clients[pos].sockconn);
-		break;
-	    }
-	}
-    }
+    Connection_confirmDataReceived(args);
 }
 
 static void tcpConnectionLost(void *receiver, void *sender, void *args)
@@ -143,7 +140,7 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
 	if (tcpclient)
 	{
 	    Event_register(Connection_dataSent(cca->client), 0, busySent, 0);
-	    Connection_write(cca->client, "busy.\n", 6);
+	    Connection_write(cca->client, "busy.\n", 6, 0);
 	    return;
 	}
 	tcpclient = cca->client;
@@ -169,26 +166,20 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
 {
     (void)receiver;
 
-    const Connection *sockconn = sender;
+    Connection *sockconn = sender;
     DataReceivedEventArgs *dra = args;
-    if (tcpclient)
+    ClientSpec *clspec = Connection_data(sockconn);
+    if (clspec)
     {
-	TcpProtoData *prdat = Connection_data(tcpclient);
-	uint16_t clientno;
-	ClientSpec *client = TcpProtoData_findClient(
-		prdat, sockconn, &clientno);
-	if (client)
-	{
-	    dra->handling = 1;
-	    prdat->wrbuf[0] = 'd';
-	    prdat->wrbuf[1] = clientno >> 8;
-	    prdat->wrbuf[2] = clientno & 0xff;
-	    prdat->wrbuf[3] = dra->size >> 8;
-	    prdat->wrbuf[4] = dra->size & 0xff;
-	    Connection_write(tcpclient, prdat->wrbuf, 5);
-	    Connection_write(tcpclient, dra->buf, dra->size);
-	    client->writereq = dra->buf;
-	}
+	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
+	dra->handling = 1;
+	prdat->wrbuf[0] = 'd';
+	prdat->wrbuf[1] = clspec->clientno >> 8;
+	prdat->wrbuf[2] = clspec->clientno & 0xff;
+	prdat->wrbuf[3] = dra->size >> 8;
+	prdat->wrbuf[4] = dra->size & 0xff;
+	Connection_write(tcpclient, prdat->wrbuf, 5, 0);
+	Connection_write(tcpclient, dra->buf, dra->size, sockconn);
     }
 }
 
@@ -206,11 +197,11 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     Event_register(Connection_dataReceived(cca->client), 0,
 	    sockDataReceived, 0);
     TcpProtoData *prdat = Connection_data(tcpclient);
-    uint16_t clientno = TcpProtoData_addClient(prdat, cca->client);
+    uint16_t clientno = registerConnection(tcpclient, cca->client);
     prdat->wrbuf[0] = 'h';
     prdat->wrbuf[1] = clientno >> 8;
     prdat->wrbuf[2] = clientno & 0xff;
-    Connection_write(tcpclient, prdat->wrbuf, 3);
+    Connection_write(tcpclient, prdat->wrbuf, 3, 0);
 }
 
 static void sockClientDisconnected(void *receiver, void *sender, void *args)
@@ -221,20 +212,15 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
     const ClientConnectionEventArgs *cca = args;
     Event_unregister(Connection_dataReceived(cca->client), 0,
 	    sockDataReceived, 0);
-    if (tcpclient)
+    ClientSpec *clspec = Connection_data(cca->client);
+    if (clspec)
     {
-	TcpProtoData *prdat = Connection_data(tcpclient);
-	uint16_t clientno;
-	ClientSpec *client = TcpProtoData_findClient(
-		prdat, cca->client, &clientno);
-	if (client)
-	{
-	    client->sockconn = 0;
-	    prdat->wrbuf[0] = 'b';
-	    prdat->wrbuf[1] = clientno >> 8;
-	    prdat->wrbuf[2] = clientno & 0xff;
-	    Connection_write(tcpclient, prdat->wrbuf, 3);
-	}
+	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
+	prdat->wrbuf[0] = 'b';
+	prdat->wrbuf[1] = clspec->clientno >> 8;
+	prdat->wrbuf[2] = clspec->clientno & 0xff;
+	Connection_write(tcpclient, prdat->wrbuf, 3, 0);
+	unregisterConnection(clspec->tcpconn, cca->client);
     }
 }
 

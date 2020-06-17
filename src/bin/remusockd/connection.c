@@ -16,6 +16,7 @@
 typedef struct WriteRecord
 {
     const char *wrbuf;
+    void *id;
     uint16_t wrbuflen;
     uint16_t wrbufpos;
 } WriteRecord;
@@ -50,7 +51,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
     WriteRecord *rec = self->writerecs + self->baserecidx;
     int rc = write(self->fd, rec->wrbuf + rec->wrbufpos,
 	    rec->wrbuflen - rec->wrbufpos);
-    DataSentEventArgs dsa = { 0 };
+    void *id = 0;
     if (rc > 0)
     {
 	if (rc < rec->wrbuflen - rec->wrbufpos)
@@ -58,15 +59,15 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	    rec->wrbufpos += rc;
 	    return;
 	}
-	else dsa.buf = rec->wrbuf;
+	else id = rec->id;
 	if (++self->baserecidx == NWRITERECS) self->baserecidx = 0;
 	if (!--self->nrecs)
 	{
 	    Service_unregisterWrite(self->fd);
 	}
-	if (dsa.buf)
+	if (id)
 	{
-	    Event_raise(self->dataSent, 0, &dsa);
+	    Event_raise(self->dataSent, 0, id);
 	}
 	return;
     }
@@ -112,7 +113,7 @@ Connection *Connection_create(int fd)
     self->dataSent = Event_create(self);
     self->fd = fd;
     self->data = 0;
-    self->deleter = free;
+    self->deleter = 0;
     self->args.buf = self->rdbuf;
     self->args.handling = 0;
     self->nrecs = 0;
@@ -138,7 +139,7 @@ Event *Connection_dataSent(Connection *self)
     return self->dataSent;
 }
 
-int Connection_write(Connection *self, const char *buf, uint16_t sz)
+int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
 {
     if (self->nrecs == NWRITERECS) return -1;
     WriteRecord *rec = self->writerecs +
@@ -146,6 +147,7 @@ int Connection_write(Connection *self, const char *buf, uint16_t sz)
     rec->wrbuflen = sz;
     rec->wrbufpos = 0;
     rec->wrbuf = buf;
+    rec->id = id;
     Service_registerWrite(self->fd);
     return 0;
 }
@@ -165,16 +167,9 @@ void Connection_close(Connection *self)
 
 void Connection_setData(Connection *self, void *data, void (*deleter)(void *))
 {
-    self->deleter(self->data);
+    if (self->deleter) self->deleter(self->data);
     self->data = data;
-    if (deleter)
-    {
-	self->deleter = deleter;
-    }
-    else
-    {
-	self->deleter = free;
-    }
+    self->deleter = deleter;
 }
 
 void *Connection_data(const Connection *self)
@@ -191,7 +186,7 @@ void Connection_destroy(Connection *self)
     Event_unregister(Service_readyRead(), self, readConnection, self->fd);
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
     close(self->fd);
-    self->deleter(self->data);
+    if (self->deleter) self->deleter(self->data);
     Event_destroy(self->dataSent);
     Event_destroy(self->dataReceived);
     Event_destroy(self->closed);
