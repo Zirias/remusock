@@ -4,7 +4,6 @@
 #include "config.h"
 #include "connection.h"
 #include "event.h"
-#include "eventargs.h"
 #include "log.h"
 #include "service.h"
 #include "server.h"
@@ -47,8 +46,7 @@ static void removeConnection(void *receiver, void *sender, void *args)
 	{
 	    Event_unregister(Connection_closed(self->conn[pos]), self,
 		    removeConnection, 0);
-	    ClientConnectionEventArgs cca = { .client = self->conn[pos] };
-	    Event_raise(self->clientDisconnected, 0, &cca);
+	    Event_raise(self->clientDisconnected, 0, self->conn[pos]);
 	    Connection_destroy(self->conn[pos]);
 	    logmsg(L_INFO, "server: client disconnected");
 	    memmove(self->conn+pos, self->conn+pos+1,
@@ -81,8 +79,7 @@ static void acceptConnection(void *receiver, void *sender, void *args)
     self->conn[self->connsize++] = newconn;
     Event_register(Connection_closed(newconn), self, removeConnection, 0);
     logmsg(L_INFO, "server: client connected");
-    ClientConnectionEventArgs cca = { .client = newconn };
-    Event_raise(self->clientConnected, 0, &cca);
+    Event_raise(self->clientConnected, 0, newconn);
 }
 
 Server *Server_create(int sockfd, char *path)

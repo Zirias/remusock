@@ -3,13 +3,6 @@
 
 #include <stdint.h>
 
-typedef struct Connection Connection;
-
-typedef struct ClientConnectionEventArgs
-{
-    Connection *client;
-} ClientConnectionEventArgs;
-
 typedef struct DataReceivedEventArgs
 {
     const char *buf;
