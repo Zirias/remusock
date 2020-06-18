@@ -15,7 +15,7 @@
 #define PIDFILE "/var/run/remusockd.pid"
 #endif
 
-static void usage(char *prgname)
+static void usage(const char *prgname)
 {
     fprintf(stderr, "Usage: %s [-cfv] [-b address]\n"
 	    "\t\t[-g group] [-m mode] [-p pidfile]\n"
@@ -129,7 +129,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
     config->sockuid = -1;
     config->sockgid = -1;
 
-    char *prgname = "remusockd";
+    const char *prgname = "remusockd";
     if (argc > 0) prgname = argv[0];
 
     for (arg = 1; arg < argc; ++arg)
@@ -184,29 +184,26 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 		}
 	    }
 	}
-	else
+	else if (optArg(config, needargs, &naidx, o) < 0)
 	{
-	    if (optArg(config, needargs, &naidx, o) < 0)
+	    if (needsocket)
 	    {
-		if (needsocket)
-		{
-		    config->sockname = o;
-		    needsocket = 0;
-		}
-		else if (needport)
-		{
-		    if (intArg(&config->port, o, 0, 65535, 10) < 0)
-		    {
-			usage(prgname);
-			return -1;
-		    }
-		    needport = 0;
-		}
-		else
+		config->sockname = o;
+		needsocket = 0;
+	    }
+	    else if (needport)
+	    {
+		if (intArg(&config->port, o, 0, 65535, 10) < 0)
 		{
 		    usage(prgname);
 		    return -1;
 		}
+		needport = 0;
+	    }
+	    else
+	    {
+		usage(prgname);
+		return -1;
 	    }
 	    endflags = 1;
 	}
