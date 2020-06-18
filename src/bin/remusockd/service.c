@@ -158,6 +158,10 @@ int Service_run(void)
     int rc = EXIT_FAILURE;
     if (cfg->sockuid != -1 && geteuid() == 0)
     {
+	if (cfg->daemonize)
+	{
+	    chown(cfg->pidfile, cfg->sockuid, cfg->sockgid);
+	}
 	if (cfg->sockgid != -1)
 	{
 	    gid_t gid = cfg->sockgid;
