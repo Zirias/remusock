@@ -1,15 +1,18 @@
-#define _POSIX_C_SOURCE 200112L
+#define _DEFAULT_SOURCE
 
 #include "service.h"
 #include "config.h"
 #include "event.h"
 #include "log.h"
 
+#include <grp.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/param.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 static const Config *cfg;
 static Event *readyRead;
@@ -152,6 +155,25 @@ int Service_run(void)
 {
     if (!cfg) return -1;
 
+    int rc = EXIT_FAILURE;
+    if (cfg->sockuid != -1 && geteuid() == 0)
+    {
+	if (cfg->sockgid != -1)
+	{
+	    gid_t gid = cfg->sockgid;
+	    if (setgroups(1, &gid) < 0 || setgid(gid) < 0)
+	    {
+		logmsg(L_ERROR, "cannot set specified group");
+		return rc;
+	    }
+	}
+	if (setuid(cfg->sockuid) < 0)
+	{
+	    logmsg(L_ERROR, "cannot set specified user");
+	    return rc;
+	}
+    }
+
     struct sigaction handler;
     memset(&handler, 0, sizeof handler);
     handler.sa_handler = handlesig;
@@ -160,7 +182,6 @@ int Service_run(void)
     sigaddset(&handler.sa_mask, SIGINT);
     sigaddset(&handler.sa_mask, SIGALRM);
     sigset_t mask;
-    int rc = EXIT_FAILURE;
 
     if (sigprocmask(SIG_BLOCK, &handler.sa_mask, &mask) < 0)
     {

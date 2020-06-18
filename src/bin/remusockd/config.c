@@ -33,6 +33,7 @@ static void usage(char *prgname)
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
 	    "\t-u user        user name or id for the server socket\n"
+	    "\t               when started as root, run as this user\n"
 	    "\t-v             verbose logging output\n"
 	    "\n"
 	    "\tsocket         unix domain socket to open\n"
