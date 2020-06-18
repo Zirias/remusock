@@ -437,11 +437,14 @@ static void tcpConnectionLost(void *receiver, void *sender, void *args)
     (void)args;
 
     Connection *conn = sender;
-    if (tcpclient == conn || pendingtcp == conn)
+    if (conn != pendingtcp)
     {
-	if (tcpclient == conn)
+	Event_unregister(Service_tick(), conn, tcpTick, 0);
+    }
+    if (conn == tcpclient || conn == pendingtcp)
+    {
+	if (conn == tcpclient)
 	{
-	    Event_unregister(Service_tick(), conn, tcpTick, 0);
 	    tcpclient = 0;
 	    logmsg(L_INFO, "protocol: TCP connection lost");
 	}
