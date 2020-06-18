@@ -10,6 +10,7 @@ typedef struct Config
     int sockClient;
     int daemonize;
     int port;
+    int sockmode;
 } Config;
 
 int Config_fromOpts(Config *config, int argc, char **argv);

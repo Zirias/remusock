@@ -14,13 +14,15 @@
 
 static void usage(char *prgname)
 {
-    fprintf(stderr, "Usage: %s [-cfv]\n"
-	    "\t\t[-b address] [-p pidfile] [-r remotehost] socket port\n",
+    fprintf(stderr, "Usage: %s [-cfv] [-b address] [-m mode]\n"
+	    "\t\t[-p pidfile] [-r remotehost] socket port\n",
 	    prgname);
     fputs("\n\t-b address     when listening, only bind to this address\n"
 	    "\t               instead of any\n"
 	    "\t-c             open unix domain socket as client\n"
 	    "\t-f             run in foreground\n"
+	    "\t-m mode        permissions of the server socket in octal,\n"
+	    "\t               defaults to 600\n"
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
 	    "\t-v             verbose logging output\n"
@@ -38,6 +40,16 @@ static int addArg(char *args, int *idx, char opt)
     return 0;
 }
 
+static int intArg(int *setting, char *op, int min, int max, int base)
+{
+    char *endp;
+    errno = 0;
+    long val = strtol(op, &endp, base);
+    if (errno == ERANGE || *endp || val < min || val > max) return -1;
+    *setting = val;
+    return 0;
+}
+
 static int optArg(Config *config, char *args, int *idx, char *op)
 {
     if (!*idx) return -1;
@@ -45,6 +57,9 @@ static int optArg(Config *config, char *args, int *idx, char *op)
     {
 	case 'b':
 	    config->bindaddr = op;
+	    break;
+	case 'm':
+	    if (intArg(&config->sockmode, op, 0, 0777, 8) < 0) return -1;
 	    break;
 	case 'p':
 	    config->pidfile = op;
@@ -71,6 +86,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
     memset(config, 0, sizeof *config);
     config->pidfile = PIDFILE;
     config->daemonize = 1;
+    config->sockmode = 0600;
 
     char *prgname = "remusockd";
     if (argc > 0) prgname = argv[0];
@@ -97,6 +113,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 		switch (*o)
 		{
 		    case 'b':
+		    case 'm':
 		    case 'p':
 		    case 'r':
 			if (addArg(needargs, &naidx, *o) < 0) return -1;
@@ -135,16 +152,11 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 		}
 		else if (needport)
 		{
-		    char *endp;
-		    errno = 0;
-		    long portno = strtol(o, &endp, 10);
-		    if (errno == ERANGE || *endp
-			    || portno < 0 || portno > 65535)
+		    if (intArg(&config->port, o, 0, 65535, 10) < 0)
 		    {
 			usage(prgname);
 			return -1;
 		    }
-		    config->port = portno;
 		    needport = 0;
 		}
 		else

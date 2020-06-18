@@ -232,6 +232,11 @@ Server *Server_createUnix(const Config *config)
         return 0;
     }
 
+    if (chmod(addr.sun_path, config->sockmode) < 0)
+    {
+	logfmt(L_ERROR, "server: cannot set desired socket permissions");
+    }
+
     Server *self = Server_create(1, &fd, copystr(addr.sun_path));
     return self;
 }
