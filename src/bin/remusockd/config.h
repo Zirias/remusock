@@ -7,6 +7,8 @@ typedef struct Config
     const char *sockname;
     const char *bindaddr;
     const char *remotehost;
+    long sockuid;
+    long sockgid;
     int sockClient;
     int daemonize;
     int port;

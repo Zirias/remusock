@@ -236,6 +236,13 @@ Server *Server_createUnix(const Config *config)
     {
 	logfmt(L_ERROR, "server: cannot set desired socket permissions");
     }
+    if (config->sockuid != -1 || config->sockgid != -1)
+    {
+	if (chown(addr.sun_path, config->sockuid, config->sockgid) < 0)
+	{
+	    logfmt(L_ERROR, "server: cannot set desired socket ownership");
+	}
+    }
 
     Server *self = Server_create(1, &fd, copystr(addr.sun_path));
     return self;
