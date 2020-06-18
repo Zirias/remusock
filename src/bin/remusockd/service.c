@@ -5,6 +5,7 @@
 #include "event.h"
 #include "log.h"
 
+#include <stdlib.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/select.h>
@@ -159,12 +160,12 @@ int Service_run(void)
     sigaddset(&handler.sa_mask, SIGINT);
     sigaddset(&handler.sa_mask, SIGALRM);
     sigset_t mask;
-    int rc = -1;
+    int rc = EXIT_FAILURE;
 
     if (sigprocmask(SIG_BLOCK, &handler.sa_mask, &mask) < 0)
     {
 	logmsg(L_ERROR, "cannot set signal mask");
-	return -1;
+	return rc;
     }
 
     if (sigaction(SIGTERM, &handler, 0) < 0)
@@ -191,6 +192,7 @@ int Service_run(void)
 	goto done;
     }
 
+    rc = EXIT_SUCCESS;
     logmsg(L_INFO, "service starting");
     while (!shutdownRequest)
     {
@@ -210,13 +212,7 @@ int Service_run(void)
 	    w = &wfds;
 	}
 	int src = pselect(nfds, r, w, 0, 0, &mask);
-	if (shutdownRequest)
-	{
-	    Event_raise(shutdown, 0, 0);
-	    rc = 0;
-	    logmsg(L_INFO, "service shutting down");
-	    break;
-	}
+	if (shutdownRequest) break;
 	if (timerTick)
 	{
 	    timerTick = 0;
@@ -226,6 +222,7 @@ int Service_run(void)
 	if (src < 0)
 	{
 	    logmsg(L_ERROR, "pselect() failed");
+	    rc = EXIT_FAILURE;
 	    break;
 	}
 	if (w) for (int i = 0; src > 0 && i < nfds; ++i)
@@ -246,17 +243,20 @@ int Service_run(void)
 	}
     }
 
+    logmsg(L_INFO, "service shutting down");
+    Event_raise(shutdown, 0, 0);
+
 done:
     if (sigprocmask(SIG_SETMASK, &mask, 0) < 0)
     {
 	logmsg(L_ERROR, "cannot restore original signal mask");
-	rc = -1;
+	rc = EXIT_FAILURE;
     }
 
     if (setitimer(ITIMER_REAL, &otimer, 0) < 0)
     {
 	logmsg(L_ERROR, "cannot restore original periodic timer");
-	rc = -1;
+	rc = EXIT_FAILURE;
     }
 
     return rc;

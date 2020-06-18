@@ -5,6 +5,8 @@
 #include "connection.h"
 #include "log.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,12 +41,21 @@ Connection *Connection_createTcpClient(const Config *config)
 	if (res->ai_family != AF_INET && res->ai_family != AF_INET6) continue;
 	fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 	if (fd < 0) continue;
-	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0)
+	int flags = fcntl(fd, F_GETFL, 0);
+	int nbflags = flags | O_NONBLOCK;
+	fcntl(fd, F_SETFL, nbflags);
+	errno = 0;
+	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0
+		&& errno != EINPROGRESS)
 	{
 	    close(fd);
 	    fd = -1;
 	}
-	else break;
+	else
+	{
+	    fcntl(fd, F_SETFL, flags);
+	    break;
+	}
     }
     freeaddrinfo(res0);
     if (fd < 0)
@@ -52,7 +63,7 @@ Connection *Connection_createTcpClient(const Config *config)
 	logfmt(L_ERROR, "client: cannot connect to `%s'", config->remotehost);
 	return 0;
     }
-    return Connection_create(fd);
+    return Connection_create(fd, 1);
 }
 
 Connection *Connection_createUnixClient(const Config *config)
@@ -76,6 +87,6 @@ Connection *Connection_createUnixClient(const Config *config)
 	return 0;
     }
 
-    return Connection_create(fd);
+    return Connection_create(fd, 0);
 }
 

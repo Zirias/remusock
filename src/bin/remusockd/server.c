@@ -75,7 +75,7 @@ static void acceptConnection(void *receiver, void *sender, void *args)
 	self->conncapa += CONNCHUNK;
 	self->conn = xrealloc(self->conn, self->conncapa * sizeof *self->conn);
     }
-    Connection *newconn = Connection_create(connfd);
+    Connection *newconn = Connection_create(connfd, 0);
     self->conn[self->connsize++] = newconn;
     Event_register(Connection_closed(newconn), self, removeConnection, 0);
     logmsg(L_INFO, "server: client connected");

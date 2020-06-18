@@ -6,7 +6,8 @@
 typedef struct Connection Connection;
 typedef struct Event Event;
 
-Connection *Connection_create(int fd);
+Connection *Connection_create(int fd, int connecting);
+Event *Connection_connected(Connection *self);
 Event *Connection_closed(Connection *self);
 Event *Connection_dataReceived(Connection *self);
 Event *Connection_dataSent(Connection *self);

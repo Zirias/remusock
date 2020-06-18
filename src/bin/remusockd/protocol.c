@@ -27,6 +27,7 @@
 #define ARG_CLIENT  0x43
 
 #define IDENTTICKS 2
+#define RECONNTICKS 6
 #define PINGTICKS 18
 #define CLOSETICKS 20
 
@@ -35,6 +36,9 @@ static const Config *cfg;
 static Server *sockserver;
 static Server *tcpserver;
 static Connection *tcpclient;
+static Connection *pendingtcp;
+static int reconnWait;
+static int reconnTicking;
 
 typedef struct ClientSpec
 {
@@ -147,8 +151,9 @@ static void TcpProtoData_delete(void *list)
     {
 	if (self->clients[pos])
 	{
-	    unregisterConnection(self->clients[pos]->tcpconn,
-		    self->clients[pos]->sockconn);
+	    Connection *sockconn = self->clients[pos]->sockconn;
+	    unregisterConnection(self->clients[pos]->tcpconn, sockconn);
+	    Connection_close(sockconn);
 	}
     }
     free(self->clients);
@@ -209,7 +214,7 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
 
     Connection *sock = sender;
     ClientSpec *client = Connection_data(sock);
-    if (client)
+    if (client && client->tcpconn)
     {
 	TcpProtoData *prdat = Connection_data(client->tcpconn);
 	prdat->wrbuf[0] = CMD_BYE;
@@ -227,7 +232,7 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
     Connection *sockconn = sender;
     DataReceivedEventArgs *dra = args;
     ClientSpec *clspec = Connection_data(sockconn);
-    if (clspec)
+    if (clspec && clspec->tcpconn)
     {
 	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
 	dra->handling = 1;
@@ -411,19 +416,86 @@ error:
     Connection_close(tcpconn);
 }
 
+static void tcpReconnect(void *receiver, void *sender, void *args);
+
+static void disableReconnTick(void *receiver, void *sender, void *args)
+{
+    (void)receiver;
+    (void)sender;
+    (void)args;
+
+    if (reconnTicking && pendingtcp)
+    {
+	Event_unregister(Service_tick(), 0, tcpReconnect, 0);
+	reconnTicking = 0;
+    }
+}
+
 static void tcpConnectionLost(void *receiver, void *sender, void *args)
 {
     (void)receiver;
     (void)args;
 
     Connection *conn = sender;
-    Event_unregister(Service_tick(), conn, tcpTick, 0);
-    if (tcpclient == conn)
+    if (tcpclient == conn || pendingtcp == conn)
     {
-	tcpclient = 0;
-	if (!tcpserver) Service_quit();
+	if (tcpclient == conn)
+	{
+	    Event_unregister(Service_tick(), conn, tcpTick, 0);
+	    tcpclient = 0;
+	    logmsg(L_INFO, "protocol: TCP connection lost");
+	}
+	if (!tcpserver)
+	{
+	    logmsg(L_DEBUG, "protocol: scheduling TCP reconnect");
+	    Event_register(Service_tick(), 0, tcpReconnect, 0);
+	    reconnTicking = 1;
+	    reconnWait = pendingtcp ? RECONNTICKS : 1;
+	    pendingtcp = 0;
+	}
     }
     Connection_deleteLater(conn);
+}
+
+static void tcpConnectionEstablished(void *receiver, void *sender, void *args)
+{
+    (void)receiver;
+    (void)args;
+
+    if (tcpclient || sender != pendingtcp)
+    {
+	logmsg(L_FATAL, "protocol: unexpected TCP connection");
+	Service_quit();
+    }
+    tcpclient = sender;
+    pendingtcp = 0;
+    Event_register(Connection_dataReceived(tcpclient), 0, tcpDataReceived, 0);
+    Event_register(Connection_dataSent(tcpclient), 0, tcpDataSent, 0);
+    Event_register(Service_tick(), tcpclient, tcpTick, 0);
+    Connection_setData(tcpclient, TcpProtoData_create(), TcpProtoData_delete);
+    logmsg(L_INFO, "protocol: TCP connection established");
+}
+
+static void tcpReconnect(void *receiver, void *sender, void *args)
+{
+    (void)receiver;
+    (void)sender;
+    (void)args;
+
+    if (!--reconnWait)
+    {
+	logmsg(L_DEBUG, "protocol: attempting to reconnect TCP");
+	pendingtcp = Connection_createTcpClient(cfg);
+	if (!pendingtcp)
+	{
+	    reconnWait = RECONNTICKS;
+	    return;
+	}
+	Event_register(Connection_connected(pendingtcp), 0,
+		tcpConnectionEstablished, 0);
+	Event_register(Connection_closed(pendingtcp), 0,
+		tcpConnectionLost, 0);
+    }
 }
 
 static void tcpClientConnected(void *receiver, void *sender, void *args)
@@ -481,13 +553,13 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
 
     Connection *client = args;
     ClientSpec *clspec = Connection_data(client);
-    if (clspec)
+    if (clspec && clspec->tcpconn)
     {
 	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
 	prdat->wrbuf[0] = CMD_BYE;
 	prdat->wrbuf[1] = clspec->clientno >> 8;
 	prdat->wrbuf[2] = clspec->clientno & 0xff;
-	Connection_write(tcpclient, prdat->wrbuf, 3, 0);
+	Connection_write(clspec->tcpconn, prdat->wrbuf, 3, 0);
 	unregisterConnection(clspec->tcpconn, client);
     }
 }
@@ -496,6 +568,8 @@ int Protocol_init(const Config *config)
 {
     if (cfg) return -1;
     cfg = config;
+    reconnWait = 0;
+    reconnTicking = 0;
     if (!config->sockClient)
     {
 	sockserver = Server_createUnix(config);
@@ -507,22 +581,18 @@ int Protocol_init(const Config *config)
     }
     if (config->remotehost)
     {
-	tcpclient = Connection_createTcpClient(config);
-	if (!tcpclient)
+	pendingtcp = Connection_createTcpClient(config);
+	if (!pendingtcp)
 	{
 	    Server_destroy(sockserver);
 	    sockserver = 0;
 	    return -1;
 	}
-	Event_register(Connection_closed(tcpclient), 0,
+	Event_register(Connection_connected(pendingtcp), 0,
+		tcpConnectionEstablished, 0);
+	Event_register(Connection_closed(pendingtcp), 0,
 		tcpConnectionLost, 0);
-	Event_register(Connection_dataReceived(tcpclient), 0,
-		tcpDataReceived, 0);
-	Event_register(Connection_dataSent(tcpclient), 0,
-		tcpDataSent, 0);
-	Event_register(Service_tick(), tcpclient, tcpTick, 0);
-	Connection_setData(tcpclient, TcpProtoData_create(),
-		TcpProtoData_delete);
+	Event_register(Service_eventsDone(), 0, disableReconnTick, 0);
     }
     else
     {
@@ -544,6 +614,7 @@ int Protocol_done(void)
 {
     if (!cfg) return -1;
     if (tcpclient) Connection_close(tcpclient);
+    if (pendingtcp) Connection_close(pendingtcp);
     Server_destroy(sockserver);
     Server_destroy(tcpserver);
     tcpclient = 0;
