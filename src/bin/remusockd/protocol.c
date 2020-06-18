@@ -16,12 +16,17 @@
 #define LISTCHUNK 8
 #define PRDBUFSZ 16
 
+#define CMD_IDENT   0x49
 #define CMD_PING    0x3f
 #define CMD_PONG    0x21
 #define CMD_HELLO   0x48
 #define CMD_BYE	    0x42
 #define	CMD_DATA    0x44
 
+#define ARG_SERVER  0x53
+#define ARG_CLIENT  0x43
+
+#define IDENTTICKS 2
 #define PINGTICKS 18
 #define CLOSETICKS 20
 
@@ -40,6 +45,7 @@ typedef struct ClientSpec
 
 typedef enum TcpProtoState
 {
+    TPS_IDENT,
     TPS_DEFAULT,
     TPS_RDCMD,
     TPS_RDDATA
@@ -64,7 +70,7 @@ static TcpProtoData *TcpProtoData_create(void)
 {
     TcpProtoData *self = xmalloc(sizeof *self);
     self->clients = xmalloc(LISTCHUNK * sizeof *self->clients);
-    self->state = TPS_DEFAULT;
+    self->state = TPS_IDENT;
     self->size = 0;
     self->capa = LISTCHUNK;
     self->rdexpect = 0;
@@ -178,7 +184,12 @@ static void tcpTick(void *receiver, void *sender, void *args)
     Connection *tcpconn = receiver;
     TcpProtoData *prdat = Connection_data(tcpconn);
     uint8_t ticks = ++prdat->idleTicks;
-    if (ticks == CLOSETICKS)
+    if (prdat->state == TPS_IDENT && ticks == IDENTTICKS)
+    {
+	logmsg(L_INFO, "protocol: timeout waiting for ident on TCP");
+	Connection_close(tcpconn);
+    }
+    else if (ticks == CLOSETICKS)
     {
 	logmsg(L_INFO, "protocol: closing unresponsive TCP connection");
 	Connection_close(tcpconn);
@@ -255,6 +266,33 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
     {
 	switch (prdat->state)
 	{
+	    case TPS_IDENT:
+		if (dra->buf[dpos] != CMD_IDENT
+			|| ++dpos == dra->size) goto error;
+		if (dra->buf[dpos] != ARG_SERVER
+			&& dra->buf[dpos] != ARG_CLIENT) goto error;
+		if (sockserver && dra->buf[dpos] == ARG_SERVER)
+		{
+		    logmsg(L_INFO, "protocol: "
+			    "dropping connection to other sock server");
+		    goto error;
+		}
+		if (!sockserver && dra->buf[dpos] == ARG_CLIENT)
+		{
+		    logmsg(L_INFO, "protocol: "
+			    "dropping connection to other sock client");
+		    goto error;
+		}
+		++dpos;
+		prdat->state = TPS_DEFAULT;
+		if (!tcpserver)
+		{
+		    prdat->wrbuf[0] = CMD_IDENT;
+		    prdat->wrbuf[1] = sockserver ? ARG_SERVER : ARG_CLIENT;
+		    Connection_write(tcpconn, prdat->wrbuf, 2, 0);
+		}
+		break;
+
 	    case TPS_DEFAULT:
 		switch (dra->buf[dpos])
 		{
@@ -404,11 +442,15 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
 	}
 	tcpclient = client;
     }
-    Connection_setData(client, TcpProtoData_create(), TcpProtoData_delete);
+    TcpProtoData *prdat = TcpProtoData_create();
+    Connection_setData(client, prdat, TcpProtoData_delete);
     Event_register(Connection_closed(client), 0, tcpConnectionLost, 0);
     Event_register(Connection_dataReceived(client), 0, tcpDataReceived, 0);
     Event_register(Connection_dataSent(client), 0, tcpDataSent, 0);
     Event_register(Service_tick(), client, tcpTick, 0);
+    prdat->wrbuf[0] = CMD_IDENT;
+    prdat->wrbuf[1] = sockserver ? ARG_SERVER : ARG_CLIENT;
+    Connection_write(client, prdat->wrbuf, 2, 0);
 }
 
 static void sockClientConnected(void *receiver, void *sender, void *args)
