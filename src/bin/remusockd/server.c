@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200112L
+#define _DEFAULT_SOURCE
 
 #include "client.h"
 #include "config.h"
@@ -23,6 +23,19 @@
 
 #define CONNCHUNK 8
 
+static char hostbuf[NI_MAXHOST];
+static char servbuf[NI_MAXSERV];
+
+struct sockaddr_in sain;
+struct sockaddr_in6 sain6;
+
+enum saddrt
+{
+    ST_UNIX,
+    ST_INET,
+    ST_INET6
+};
+
 struct Server
 {
     Event *clientConnected;
@@ -31,8 +44,9 @@ struct Server
     char *path;
     size_t conncapa;
     size_t connsize;
-    uint8_t nsocks;
     int fd[MAXSOCKS];
+    enum saddrt st[MAXSOCKS];
+    uint8_t nsocks;
 };
 
 static void removeConnection(void *receiver, void *sender, void *args)
@@ -45,8 +59,9 @@ static void removeConnection(void *receiver, void *sender, void *args)
     {
 	if (self->conn[pos] == conn)
 	{
+	    logfmt(L_DEBUG, "server: client disconnected from %s",
+		    Connection_remoteAddr(conn));
 	    Connection_deleteLater(conn);
-	    logmsg(L_INFO, "server: client disconnected");
 	    memmove(self->conn+pos, self->conn+pos+1,
 		    (self->connsize - pos) * sizeof *self->conn);
 	    --self->connsize;
@@ -64,7 +79,31 @@ static void acceptConnection(void *receiver, void *sender, void *args)
 
     Server *self = receiver;
     int *sockfd = args;
-    int connfd = accept(*sockfd, 0, 0);
+    enum saddrt st = ST_UNIX;
+    for (uint8_t n = 0; n < self->nsocks; ++n)
+    {
+	if (self->fd[n] == *sockfd)
+	{
+	    st = self->st[n];
+	    break;
+	}
+    }
+    socklen_t salen;
+    struct sockaddr *sa = 0;
+    socklen_t *sl = 0;
+    if (st == ST_INET)
+    {
+	sa = (struct sockaddr *)&sain;
+	salen = sizeof sain;
+	sl = &salen;
+    }
+    else if (st == ST_INET6)
+    {
+	sa = (struct sockaddr *)&sain6;
+	salen = sizeof sain6;
+	sl = &salen;
+    }
+    int connfd = accept(*sockfd, sa, sl);
     if (connfd < 0)
     {
 	logmsg(L_WARNING, "server: failed to accept connection");
@@ -78,11 +117,22 @@ static void acceptConnection(void *receiver, void *sender, void *args)
     Connection *newconn = Connection_create(connfd, 0);
     self->conn[self->connsize++] = newconn;
     Event_register(Connection_closed(newconn), self, removeConnection, 0);
-    logmsg(L_INFO, "server: client connected");
+    if (self->path)
+    {
+	Connection_setRemoteAddr(newconn, self->path);
+    }
+    else if (sa && getnameinfo(sa, salen, hostbuf, sizeof hostbuf,
+		servbuf, sizeof servbuf, NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
+    {
+	Connection_setRemoteAddr(newconn, hostbuf);
+    }
+    logfmt(L_DEBUG, "server: client connected from %s",
+	    Connection_remoteAddr(newconn));
     Event_raise(self->clientConnected, 0, newconn);
 }
 
-Server *Server_create(uint8_t nsocks, int *sockfd, char *path)
+Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
+	char *path)
 {
     if (nsocks < 1 || nsocks > MAXSOCKS) return 0;
     Server *self = xmalloc(sizeof *self);
@@ -94,6 +144,7 @@ Server *Server_create(uint8_t nsocks, int *sockfd, char *path)
     self->connsize = 0;
     self->nsocks = nsocks;
     memcpy(self->fd, sockfd, nsocks * sizeof *sockfd);
+    memcpy(self->st, st, nsocks * sizeof *st);
     for (uint8_t i = 0; i < nsocks; ++i)
     {
 	Event_register(Service_readyRead(), self, acceptConnection, sockfd[i]);
@@ -106,6 +157,7 @@ Server *Server_create(uint8_t nsocks, int *sockfd, char *path)
 Server *Server_createTcp(const Config *config)
 {
     int fd[MAXSOCKS];
+    enum saddrt st[MAXSOCKS];
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
@@ -151,7 +203,15 @@ Server *Server_createTcp(const Config *config)
 	    close(fd[nsocks]);
 	    continue;
 	}
-	++nsocks;
+	const char *addrstr = "<unknown>";
+	if (getnameinfo(res->ai_addr, res->ai_addrlen, hostbuf, sizeof hostbuf,
+		    servbuf, sizeof servbuf,
+		    NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
+	{
+	    addrstr = hostbuf;
+	}
+	logfmt(L_INFO, "server: listening on %s", addrstr);
+	st[nsocks++] = res->ai_family == AF_INET ? ST_INET : ST_INET6;
     }
     freeaddrinfo(res0);
     if (!nsocks)
@@ -160,7 +220,7 @@ Server *Server_createTcp(const Config *config)
 	return 0;
     }
     
-    Server *self = Server_create(nsocks, fd, 0);
+    Server *self = Server_create(nsocks, fd, st, 0);
     return self;
 }
 
@@ -231,6 +291,7 @@ Server *Server_createUnix(const Config *config)
         close(fd);
         return 0;
     }
+    logfmt(L_INFO, "server: listening on %s", addr.sun_path);
 
     if (chmod(addr.sun_path, config->sockmode) < 0)
     {
@@ -244,7 +305,8 @@ Server *Server_createUnix(const Config *config)
 	}
     }
 
-    Server *self = Server_create(1, &fd, copystr(addr.sun_path));
+    enum saddrt sat = ST_UNIX;
+    Server *self = Server_create(1, &fd, &sat, copystr(addr.sun_path));
     return self;
 }
 

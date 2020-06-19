@@ -29,6 +29,8 @@ typedef struct Connection
     Event *closed;
     Event *dataReceived;
     Event *dataSent;
+    char *addr;
+    char *name;
     void *data;
     void (*deleter)(void *);
     WriteRecord writerecs[NWRITERECS];
@@ -54,7 +56,8 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	if (getsockopt(self->fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0
 		|| err)
 	{
-	    logmsg(L_INFO, "connection: failed to connect");
+	    logfmt(L_INFO, "connection: failed to connect to %s",
+		    Connection_remoteAddr(self));
 	    Event_raise(self->closed, 0, 0);
 	    return;
 	}
@@ -153,6 +156,8 @@ Connection *Connection_create(int fd, int connecting)
     self->dataSent = Event_create(self);
     self->fd = fd;
     self->connecting = connecting;
+    self->addr = 0;
+    self->name = 0;
     self->data = 0;
     self->deleter = 0;
     self->args.buf = self->rdbuf;
@@ -191,6 +196,18 @@ Event *Connection_dataReceived(Connection *self)
 Event *Connection_dataSent(Connection *self)
 {
     return self->dataSent;
+}
+
+const char *Connection_remoteAddr(const Connection *self)
+{
+    if (!self->addr) return "<unknown>";
+    return self->addr;
+}
+
+void Connection_setRemoteAddr(Connection *self, const char *addr)
+{
+    free(self->addr);
+    self->addr = copystr(addr);
 }
 
 int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
@@ -257,6 +274,8 @@ void Connection_destroy(Connection *self)
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
     close(self->fd);
     if (self->deleter) self->deleter(self->data);
+    free(self->addr);
+    free(self->name);
     Event_destroy(self->dataSent);
     Event_destroy(self->dataReceived);
     Event_destroy(self->closed);

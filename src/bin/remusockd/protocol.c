@@ -351,9 +351,16 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 				Event_register(
 					Connection_closed(sockclient),
 					0, sockConnectionLost, 0);
+				logfmt(L_INFO, "protocol: new remote socket "
+					"client from %s on %s",
+					Connection_remoteAddr(tcpconn),
+					Connection_remoteAddr(sockclient));
 			    }
 			    else
 			    {
+				logfmt(L_WARNING, "protocol: cannot connect "
+					"new remote socket client from %s",
+					Connection_remoteAddr(tcpconn));
 				if (sockclient) Connection_destroy(sockclient);
 				prdat->wrbuf[0] = CMD_BYE;
 				prdat->wrbuf[1] = prdat->rdbuf[1];
@@ -366,6 +373,10 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    client = connectionAt(tcpconn, clientno);
 			    if (!client) goto error;
 			    sockclient = client->sockconn;
+			    logfmt(L_INFO, "protocol: remote socket client "
+				    "from %s disconnected on %s",
+				    Connection_remoteAddr(tcpconn),
+				    Connection_remoteAddr(sockclient));
 			    unregisterConnection(tcpconn, sockclient);
 			    if (sockserver)
 			    {
@@ -412,7 +423,8 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
     return;
 
 error:
-    logmsg(L_DEBUG, "protocol error");
+    logfmt(L_INFO, "protocol: protocol error from %s",
+	    Connection_remoteAddr(tcpconn));
     Connection_close(tcpconn);
 }
 
@@ -440,13 +452,14 @@ static void tcpConnectionLost(void *receiver, void *sender, void *args)
     if (conn != pendingtcp)
     {
 	Event_unregister(Service_tick(), conn, tcpTick, 0);
+	logfmt(L_INFO, "protocol: lost TCP connection to %s",
+		Connection_remoteAddr(conn));
     }
     if (conn == tcpclient || conn == pendingtcp)
     {
 	if (conn == tcpclient)
 	{
 	    tcpclient = 0;
-	    logmsg(L_INFO, "protocol: TCP connection lost");
 	}
 	if (!tcpserver)
 	{
@@ -476,7 +489,8 @@ static void tcpConnectionEstablished(void *receiver, void *sender, void *args)
     Event_register(Connection_dataSent(tcpclient), 0, tcpDataSent, 0);
     Event_register(Service_tick(), tcpclient, tcpTick, 0);
     Connection_setData(tcpclient, TcpProtoData_create(), TcpProtoData_delete);
-    logmsg(L_INFO, "protocol: TCP connection established");
+    logfmt(L_INFO, "protocol: TCP connection established to %s",
+	    Connection_remoteAddr(tcpclient));
 }
 
 static void tcpReconnect(void *receiver, void *sender, void *args)
@@ -522,6 +536,8 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
     Event_register(Connection_closed(client), 0, tcpConnectionLost, 0);
     Event_register(Connection_dataReceived(client), 0, tcpDataReceived, 0);
     Event_register(Connection_dataSent(client), 0, tcpDataSent, 0);
+    logfmt(L_INFO, "protocol: TCP client connected from %s",
+	    Connection_remoteAddr(client));
     Event_register(Service_tick(), client, tcpTick, 0);
     prdat->wrbuf[0] = CMD_IDENT;
     prdat->wrbuf[1] = sockserver ? ARG_SERVER : ARG_CLIENT;
@@ -541,6 +557,8 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     }
     Event_register(Connection_dataReceived(client), 0, sockDataReceived, 0);
     Event_register(Connection_dataSent(client), 0, sockDataSent, 0);
+    logfmt(L_INFO, "protocol: new socket client on %s",
+	    Connection_remoteAddr(client));
     TcpProtoData *prdat = Connection_data(tcpclient);
     uint16_t clientno = registerConnection(tcpclient, client);
     prdat->wrbuf[0] = CMD_HELLO;
@@ -556,6 +574,8 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
 
     Connection *client = args;
     ClientSpec *clspec = Connection_data(client);
+    logfmt(L_INFO, "protocol: socket client disconnected on %s",
+	    Connection_remoteAddr(client));
     if (clspec && clspec->tcpconn)
     {
 	TcpProtoData *prdat = Connection_data(clspec->tcpconn);

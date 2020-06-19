@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200112L
+#define _DEFAULT_SOURCE
 
 #include "client.h"
 #include "config.h"
@@ -14,6 +14,9 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+static char hostbuf[NI_MAXHOST];
+static char servbuf[NI_MAXSERV];
 
 Connection *Connection_createTcpClient(const Config *config)
 {
@@ -54,6 +57,12 @@ Connection *Connection_createTcpClient(const Config *config)
 	else
 	{
 	    fcntl(fd, F_SETFL, flags);
+	    if (getnameinfo(res->ai_addr, res->ai_addrlen, hostbuf,
+			sizeof hostbuf, servbuf, sizeof servbuf,
+			NI_NUMERICHOST|NI_NUMERICSERV) < 0)
+	    {
+		*hostbuf = 0;
+	    }
 	    break;
 	}
     }
@@ -63,7 +72,9 @@ Connection *Connection_createTcpClient(const Config *config)
 	logfmt(L_ERROR, "client: cannot connect to `%s'", config->remotehost);
 	return 0;
     }
-    return Connection_create(fd, 1);
+    Connection *conn = Connection_create(fd, 1);
+    if (*hostbuf) Connection_setRemoteAddr(conn, hostbuf);
+    return conn;
 }
 
 Connection *Connection_createUnixClient(const Config *config)
@@ -87,6 +98,8 @@ Connection *Connection_createUnixClient(const Config *config)
 	return 0;
     }
 
-    return Connection_create(fd, 0);
+    Connection *conn = Connection_create(fd, 0);
+    Connection_setRemoteAddr(conn, addr.sun_path);
+    return conn;
 }
 

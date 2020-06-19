@@ -11,6 +11,8 @@ Event *Connection_connected(Connection *self);
 Event *Connection_closed(Connection *self);
 Event *Connection_dataReceived(Connection *self);
 Event *Connection_dataSent(Connection *self);
+const char *Connection_remoteAddr(const Connection *self);
+void Connection_setRemoteAddr(Connection *self, const char *addr);
 int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id);
 int Connection_confirmDataReceived(Connection *self);
 void Connection_close(Connection *self);
