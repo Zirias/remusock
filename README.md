@@ -33,3 +33,9 @@ Usage: remusockd [-cfv] [-b address]
 * event loop is based on `pselect()`, so this doesn't scale to huge numbers
   of connections
 
+### Features
+
+* Multiple socket connections tunnelled through a single TCP connection
+* TCP can work in either direction between socket server and socket client
+* TCP connections are monitored, the client side attempts to automatically
+  restore a lost connection
