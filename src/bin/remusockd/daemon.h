@@ -3,6 +3,8 @@
 
 typedef int (*daemon_main)(void *data);
 
-int daemon_run(const daemon_main dmain, void *data, const char *pidfile);
+int daemon_run(const daemon_main dmain, void *data,
+	const char *pidfile, int waitLaunched);
+void daemon_launched(void);
 
 #endif

@@ -11,15 +11,16 @@
 static int dmain(void *data)
 {
     Config *config = data;
-    if (config->daemonize)
-    {
-	setSyslogLogger(LOG_DAEMON, 0);
-    }
 
     Service_init(config);
     int rc = EXIT_FAILURE;
     if (Protocol_init(config) >= 0)
     {
+	if (config->daemonize)
+	{
+	    setSyslogLogger(LOG_DAEMON, 0);
+	    daemon_launched();
+	}
 	rc = Service_run();
 	Protocol_done();
     }
@@ -35,7 +36,7 @@ int main(int argc, char **argv)
     if (config.daemonize)
     {
 	setSyslogLogger(LOG_DAEMON, 1);
-	return daemon_run(dmain, &config, config.pidfile);
+	return daemon_run(dmain, &config, config.pidfile, 1);
     }
     else
     {
