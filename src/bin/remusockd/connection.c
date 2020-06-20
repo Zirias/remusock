@@ -14,6 +14,7 @@
 
 #define CONNBUFSZ 4096
 #define NWRITERECS 16
+#define CONNTICKS 6
 
 typedef struct WriteRecord
 {
@@ -43,6 +44,21 @@ typedef struct Connection
     char rdbuf[CONNBUFSZ];
 } Connection;
 
+static void checkPendingConnection(void *receiver, void *sender, void *args)
+{
+    (void)sender;
+    (void)args;
+
+    Connection *self = receiver;
+    if (self->connecting && !--self->connecting)
+    {
+	logfmt(L_INFO, "connection: timeout connecting to %s",
+		Connection_remoteAddr(self));
+	Service_unregisterWrite(self->fd);
+	Event_raise(self->closed, 0, 0);
+    }
+}
+
 static void writeConnection(void *receiver, void *sender, void *args)
 {
     (void)sender;
@@ -51,6 +67,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
     Connection *self = receiver;
     if (self->connecting)
     {
+	Event_unregister(Service_tick(), self, checkPendingConnection, 0);
 	int err = 0;
 	socklen_t errlen = sizeof err;
 	if (getsockopt(self->fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0
@@ -147,7 +164,7 @@ static void deleteConnection(void *receiver, void *sender, void *args)
     Connection_destroy(self);
 }
 
-Connection *Connection_create(int fd, int connecting)
+Connection *Connection_create(int fd, ConnectionCreateMode mode)
 {
     Connection *self = xmalloc(sizeof *self);
     self->connected = Event_create(self);
@@ -155,7 +172,7 @@ Connection *Connection_create(int fd, int connecting)
     self->dataReceived = Event_create(self);
     self->dataSent = Event_create(self);
     self->fd = fd;
-    self->connecting = connecting;
+    self->connecting = 0;
     self->addr = 0;
     self->name = 0;
     self->data = 0;
@@ -167,11 +184,13 @@ Connection *Connection_create(int fd, int connecting)
     self->baserecidx = 0;
     Event_register(Service_readyRead(), self, readConnection, fd);
     Event_register(Service_readyWrite(), self, writeConnection, fd);
-    if (connecting)
+    if (mode == CCM_CONNECTING)
     {
+	self->connecting = CONNTICKS;
+	Event_register(Service_tick(), self, checkPendingConnection, 0);
 	Service_registerWrite(fd);
     }
-    else
+    else if (mode == CCM_NORMAL)
     {
 	Service_registerRead(fd);
     }
@@ -223,12 +242,18 @@ int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
     return 0;
 }
 
+void Connection_activate(Connection *self)
+{
+    if (self->args.handling) return;
+    logmsg(L_DEBUG, "connection: unblocking reads");
+    Service_registerRead(self->fd);
+}
+
 int Connection_confirmDataReceived(Connection *self)
 {
     if (!self->args.handling) return -1;
-    logmsg(L_DEBUG, "connection: unblocking reads");
     self->args.handling = 0;
-    Service_registerRead(self->fd);
+    Connection_activate(self);
     return 0;
 }
 
@@ -270,6 +295,7 @@ void Connection_destroy(Connection *self)
     {
 	Event_unregister(Service_eventsDone(), self, deleteConnection, 0);
     }
+    Event_unregister(Service_tick(), self, checkPendingConnection, 0);
     Event_unregister(Service_readyRead(), self, readConnection, self->fd);
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
     close(self->fd);

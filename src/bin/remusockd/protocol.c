@@ -20,6 +20,7 @@
 #define CMD_PING    0x3f
 #define CMD_PONG    0x21
 #define CMD_HELLO   0x48
+#define CMD_CONNECT 0x43
 #define CMD_BYE	    0x42
 #define	CMD_DATA    0x44
 
@@ -225,6 +226,23 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
     Connection_deleteLater(sock);
 }
 
+static void sockConnectionEstablished(void *receiver, void *sender, void *args)
+{
+    (void)receiver;
+    (void)args;
+
+    Connection *sockconn = sender;
+    ClientSpec *clspec = Connection_data(sockconn);
+    if (clspec && clspec->tcpconn)
+    {
+	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
+	prdat->wrbuf[0] = CMD_CONNECT;
+	prdat->wrbuf[1] = clspec->clientno >> 8;
+	prdat->wrbuf[2] = clspec->clientno & 0xff;
+	Connection_write(clspec->tcpconn, prdat->wrbuf, 3, 0);
+    }
+}
+
 static void sockDataReceived(void *receiver, void *sender, void *args)
 {
     (void)receiver;
@@ -313,6 +331,10 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			if (sockserver) goto error;
 			prdat->rdexpect = 2;
 			break;
+		    case CMD_CONNECT:
+			if (!sockserver) goto error;
+			prdat->rdexpect = 2;
+			break;
 		    case CMD_BYE:
 			prdat->rdexpect = 2;
 			break;
@@ -343,6 +365,9 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 					sockclient, clientno) == clientno)
 			    {
 				Event_register(
+					Connection_connected(sockclient),
+					0, sockConnectionEstablished, 0);
+				Event_register(
 					Connection_dataReceived(sockclient),
 					0, sockDataReceived, 0);
 				Event_register(
@@ -367,6 +392,16 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 				prdat->wrbuf[2] = prdat->rdbuf[2];
 				Connection_write(tcpconn, prdat->wrbuf, 3, 0);
 			    }
+			    prdat->state = TPS_DEFAULT;
+			    break;
+			case CMD_CONNECT:
+			    client = connectionAt(tcpconn, clientno);
+			    if (!client) goto error;
+			    sockclient = client->sockconn;
+			    logfmt(L_INFO, "protocol: remote socket client "
+				    "accepted from %s",
+				    Connection_remoteAddr(tcpconn));
+			    Connection_activate(sockclient);
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_BYE:
@@ -550,6 +585,8 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     (void)sender;
 
     Connection *client = args;
+    logfmt(L_INFO, "protocol: new socket client on %s",
+	    Connection_remoteAddr(client));
     if (!tcpclient)
     {
 	Connection_close(client);
@@ -557,8 +594,6 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     }
     Event_register(Connection_dataReceived(client), 0, sockDataReceived, 0);
     Event_register(Connection_dataSent(client), 0, sockDataSent, 0);
-    logfmt(L_INFO, "protocol: new socket client on %s",
-	    Connection_remoteAddr(client));
     TcpProtoData *prdat = Connection_data(tcpclient);
     uint16_t clientno = registerConnection(tcpclient, client);
     prdat->wrbuf[0] = CMD_HELLO;
@@ -595,7 +630,7 @@ int Protocol_init(const Config *config)
     reconnTicking = 0;
     if (!config->sockClient)
     {
-	sockserver = Server_createUnix(config);
+	sockserver = Server_createUnix(config, CCM_WAIT);
 	if (!sockserver) return -1;
 	Event_register(Server_clientConnected(sockserver), 0,
 		sockClientConnected, 0);
@@ -619,7 +654,7 @@ int Protocol_init(const Config *config)
     }
     else
     {
-	tcpserver = Server_createTcp(config);
+	tcpserver = Server_createTcp(config, CCM_NORMAL);
 	if (!tcpserver)
 	{
 	    Server_destroy(sockserver);

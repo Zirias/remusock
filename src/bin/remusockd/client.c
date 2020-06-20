@@ -72,7 +72,7 @@ Connection *Connection_createTcpClient(const Config *config)
 	logfmt(L_ERROR, "client: cannot connect to `%s'", config->remotehost);
 	return 0;
     }
-    Connection *conn = Connection_create(fd, 1);
+    Connection *conn = Connection_create(fd, CCM_CONNECTING);
     if (*hostbuf) Connection_setRemoteAddr(conn, hostbuf);
     return conn;
 }
@@ -91,14 +91,19 @@ Connection *Connection_createUnixClient(const Config *config)
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, config->sockname, sizeof addr.sun_path - 1);
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0)
+    int flags = fcntl(fd, F_GETFL, 0);
+    int nbflags = flags | O_NONBLOCK;
+    fcntl(fd, F_SETFL, nbflags);
+    errno = 0;
+    if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0
+	    && errno != EINPROGRESS)
     {
 	logfmt(L_ERROR, "client: error connecting to `%s'", addr.sun_path);
 	close(fd);
 	return 0;
     }
-
-    Connection *conn = Connection_create(fd, 0);
+    fcntl(fd, F_SETFL, flags);
+    Connection *conn = Connection_create(fd, CCM_CONNECTING);
     Connection_setRemoteAddr(conn, addr.sun_path);
     return conn;
 }
