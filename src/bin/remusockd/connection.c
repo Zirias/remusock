@@ -1,10 +1,14 @@
+#define _DEFAULT_SOURCE
+
 #include "connection.h"
 #include "event.h"
 #include "eventargs.h"
 #include "log.h"
 #include "service.h"
+#include "threadpool.h"
 #include "util.h"
 
+#include <netdb.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +19,10 @@
 #define CONNBUFSZ 4096
 #define NWRITERECS 16
 #define CONNTICKS 6
+#define RESOLVTICKS 6
+
+static char hostbuf[NI_MAXHOST];
+static char servbuf[NI_MAXSERV];
 
 typedef struct WriteRecord
 {
@@ -231,7 +239,82 @@ const char *Connection_remoteAddr(const Connection *self)
     return self->addr;
 }
 
-void Connection_setRemoteAddr(Connection *self, const char *addr)
+typedef struct RemoteAddrResolveArgs
+{
+    struct sockaddr *addr;
+    socklen_t addrlen;
+    int rc;
+    char name[NI_MAXHOST];
+} RemoteAddrResolveArgs;
+
+static void resolveRemoteAddrProc(void *arg)
+{
+    RemoteAddrResolveArgs *rara = arg;
+    char buf[NI_MAXSERV];
+    rara->rc = getnameinfo(rara->addr, rara->addrlen,
+	    rara->name, sizeof rara->name, buf, sizeof buf, NI_NUMERICSERV);
+}
+
+static void resolveRemoteAddrFinished(void *receiver, void *sender, void *args)
+{
+    Connection *self = receiver;
+    ThreadJob *job = sender;
+    RemoteAddrResolveArgs *rara = args;
+
+    if (ThreadJob_hasCompleted(job))
+    {
+	if (rara->rc >= 0 && strcmp(rara->name, self->addr) != 0)
+	{
+	    logfmt(L_INFO, "connection: %s is %s", self->addr, rara->name);
+	    char *fullname = xmalloc(
+		    strlen(self->addr) + strlen(rara->name) + 4);
+	    strcpy(fullname, rara->name);
+	    strcat(fullname, " [");
+	    strcat(fullname, self->addr);
+	    strcat(fullname, "]");
+	    free(self->addr);
+	    self->addr = fullname;
+	}
+	else
+	{
+	    logfmt(L_INFO, "connection: error resolving name for %s",
+		    self->addr);
+	}
+    }
+    else
+    {
+	logfmt(L_INFO, "connection: timeout resolving name for %s",
+		self->addr);
+    }
+    free(rara->addr);
+    free(rara);
+}
+
+void Connection_setRemoteAddr(Connection *self,
+	struct sockaddr *addr, socklen_t addrlen, int numericOnly)
+{
+    free(self->addr);
+    self->addr = 0;
+    if (getnameinfo(addr, addrlen, hostbuf, sizeof hostbuf,
+		servbuf, sizeof servbuf, NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
+    {
+	self->addr = copystr(hostbuf);
+	if (!numericOnly && ThreadPool_active())
+	{
+	    RemoteAddrResolveArgs *rara = xmalloc(sizeof *rara);
+	    rara->addr = xmalloc(addrlen);
+	    memcpy(rara->addr, addr, addrlen);
+	    rara->addrlen = addrlen;
+	    ThreadJob *job = ThreadJob_create(resolveRemoteAddrProc, rara,
+		    RESOLVTICKS);
+	    Event_register(ThreadJob_finished(job), self,
+		    resolveRemoteAddrFinished, 0);
+	    ThreadPool_enqueue(job);
+	}
+    }
+}
+
+void Connection_setRemoteAddrStr(Connection *self, const char *addr)
 {
     free(self->addr);
     self->addr = copystr(addr);

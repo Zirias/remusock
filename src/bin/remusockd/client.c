@@ -15,9 +15,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-static char hostbuf[NI_MAXHOST];
-static char servbuf[NI_MAXSERV];
-
 Connection *Connection_createTcpClient(const Config *config)
 {
     if (!config->remotehost)
@@ -57,23 +54,18 @@ Connection *Connection_createTcpClient(const Config *config)
 	else
 	{
 	    fcntl(fd, F_SETFL, flags);
-	    if (getnameinfo(res->ai_addr, res->ai_addrlen, hostbuf,
-			sizeof hostbuf, servbuf, sizeof servbuf,
-			NI_NUMERICHOST|NI_NUMERICSERV) < 0)
-	    {
-		*hostbuf = 0;
-	    }
 	    break;
 	}
     }
-    freeaddrinfo(res0);
     if (fd < 0)
     {
+	freeaddrinfo(res0);
 	logfmt(L_ERROR, "client: cannot connect to `%s'", config->remotehost);
 	return 0;
     }
     Connection *conn = Connection_create(fd, CCM_CONNECTING);
-    if (*hostbuf) Connection_setRemoteAddr(conn, hostbuf);
+    Connection_setRemoteAddr(conn, res->ai_addr, res->ai_addrlen, 0);
+    freeaddrinfo(res0);
     return conn;
 }
 
@@ -104,7 +96,7 @@ Connection *Connection_createUnixClient(const Config *config)
     }
     fcntl(fd, F_SETFL, flags);
     Connection *conn = Connection_create(fd, CCM_CONNECTING);
-    Connection_setRemoteAddr(conn, addr.sun_path);
+    Connection_setRemoteAddrStr(conn, addr.sun_path);
     return conn;
 }
 

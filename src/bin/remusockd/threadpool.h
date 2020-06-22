@@ -8,6 +8,7 @@ typedef void (*ThreadProc)(void *arg);
 
 ThreadJob *ThreadJob_create(ThreadProc proc, void *arg, int timeoutTicks);
 Event *ThreadJob_finished(ThreadJob *self);
+int ThreadJob_hasCompleted(const ThreadJob *self);
 
 int ThreadPool_init(void);
 int ThreadPool_active(void);

@@ -120,12 +120,11 @@ static void acceptConnection(void *receiver, void *sender, void *args)
     Event_register(Connection_closed(newconn), self, removeConnection, 0);
     if (self->path)
     {
-	Connection_setRemoteAddr(newconn, self->path);
+	Connection_setRemoteAddrStr(newconn, self->path);
     }
-    else if (sa && getnameinfo(sa, salen, hostbuf, sizeof hostbuf,
-		servbuf, sizeof servbuf, NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
+    else if (sa)
     {
-	Connection_setRemoteAddr(newconn, hostbuf);
+	Connection_setRemoteAddr(newconn, sa, salen, 0);
     }
     logfmt(L_DEBUG, "server: client connected from %s",
 	    Connection_remoteAddr(newconn));

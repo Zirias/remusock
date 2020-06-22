@@ -29,7 +29,7 @@ typedef struct LogJobArgs
     char message[];
 } LogJobArgs;
 
-void logmsgJobProc(void *arg)
+static void logmsgJobProc(void *arg)
 {
     LogJobArgs *lja = arg;
     lja->writer(lja->level, lja->message, lja->writerdata);

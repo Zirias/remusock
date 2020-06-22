@@ -20,6 +20,7 @@ struct ThreadJob
     ThreadProc proc;
     void *arg;
     Event *finished;
+    int hasCompleted;
     int timeoutTicks;
 };
 
@@ -94,7 +95,18 @@ ThreadJob *ThreadJob_create(ThreadProc proc, void *arg, int timeoutTicks)
     self->arg = arg;
     self->finished = Event_create(self);
     self->timeoutTicks = timeoutTicks;
+    self->hasCompleted = 1;
     return self;
+}
+
+Event *ThreadJob_finished(ThreadJob *self)
+{
+    return self->finished;
+}
+
+int ThreadJob_hasCompleted(const ThreadJob *self)
+{
+    return self->hasCompleted;
 }
 
 void ThreadJob_destroy(ThreadJob *self)
@@ -172,6 +184,7 @@ void threadJobDone(void *receiver, void *sender, void *args)
     Thread *t = receiver;
     char buf[2];
     read(t->pipefd[0], buf, sizeof buf);
+    Event_raise(t->job->finished, 0, t->job->arg);
     ThreadJob_destroy(t->job);
     t->job = 0;
     ThreadJob *next = dequeueJob();
@@ -190,6 +203,7 @@ void checkThreadJobs(void *receiver, void *sender, void *args)
 		&& !--threads[i].job->timeoutTicks)
 	{
 	    pthread_kill(threads[i].handle, SIGUSR1);
+	    threads[i].job->hasCompleted = 0;
 	}
     }
 }
