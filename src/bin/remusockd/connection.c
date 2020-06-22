@@ -81,14 +81,17 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	self->connecting = 0;
 	Service_registerRead(self->fd);
 	Service_unregisterWrite(self->fd);
-	logmsg(L_DEBUG, "connection: connected");
+	logfmt(L_DEBUG, "connection: connected to %s",
+		Connection_remoteAddr(self));
 	Event_raise(self->connected, 0, 0);
 	return;
     }
-    logmsg(L_DEBUG, "connection: ready to write");
+    logfmt(L_DEBUG, "connection: ready to write to %s",
+	Connection_remoteAddr(self));
     if (!self->nrecs)
     {
-	logmsg(L_ERROR, "connection: ready to send with empty buffer");
+	logfmt(L_ERROR, "connection: ready to send to %s with empty buffer",
+		Connection_remoteAddr(self));
 	Service_unregisterWrite(self->fd);
 	return;
     }
@@ -116,7 +119,8 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	return;
     }
 
-    logmsg(L_WARNING, "connection: error writing to connection");
+    logfmt(L_WARNING, "connection: error writing to %s",
+	    Connection_remoteAddr(self));
     Event_raise(self->closed, 0, 0);
 }
 
@@ -125,12 +129,14 @@ static void readConnection(void *receiver, void *sender, void *args)
     (void)sender;
     (void)args;
 
-    logmsg(L_DEBUG, "connection: ready to read");
     Connection *self = receiver;
+    logfmt(L_DEBUG, "connection: ready to read from %s",
+	    Connection_remoteAddr(self));
     if (self->args.handling)
     {
-	logmsg(L_WARNING,
-		"connection: new data while read buffer still handled");
+	logfmt(L_WARNING,
+		"connection: new data while read buffer from %s still handled",
+		Connection_remoteAddr(self));
 	return;
     }
 
@@ -141,7 +147,8 @@ static void readConnection(void *receiver, void *sender, void *args)
 	Event_raise(self->dataReceived, 0, &self->args);
 	if (self->args.handling)
 	{
-	    logmsg(L_DEBUG, "connection: blocking reads");
+	    logfmt(L_DEBUG, "connection: blocking reads from %s",
+		    Connection_remoteAddr(self));
 	    Service_unregisterRead(self->fd);
 	}
 	return;
@@ -149,7 +156,8 @@ static void readConnection(void *receiver, void *sender, void *args)
 
     if (rc < 0)
     {
-	logmsg(L_WARNING, "connection: error reading from connection");
+	logfmt(L_WARNING, "connection: error reading from %s",
+		Connection_remoteAddr(self));
     }
     Event_raise(self->closed, 0, 0);
 }
@@ -245,7 +253,8 @@ int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
 void Connection_activate(Connection *self)
 {
     if (self->args.handling) return;
-    logmsg(L_DEBUG, "connection: unblocking reads");
+    logfmt(L_DEBUG, "connection: unblocking reads from %s",
+	    Connection_remoteAddr(self));
     Service_registerRead(self->fd);
 }
 

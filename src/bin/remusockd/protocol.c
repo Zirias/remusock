@@ -192,17 +192,20 @@ static void tcpTick(void *receiver, void *sender, void *args)
     uint8_t ticks = ++prdat->idleTicks;
     if (prdat->state == TPS_IDENT && ticks == IDENTTICKS)
     {
-	logmsg(L_INFO, "protocol: timeout waiting for ident on TCP");
+	logfmt(L_INFO, "protocol: timeout waiting for ident from %s",
+		Connection_remoteAddr(tcpconn));
 	Connection_close(tcpconn);
     }
     else if (ticks == CLOSETICKS)
     {
-	logmsg(L_INFO, "protocol: closing unresponsive TCP connection");
+	logfmt(L_INFO, "protocol: closing unresponsive connection to %s",
+		Connection_remoteAddr(tcpconn));
 	Connection_close(tcpconn);
     }
     else if (ticks == PINGTICKS)
     {
-	logmsg(L_DEBUG, "protocol: pinging idle TCP connection");
+	logfmt(L_DEBUG, "protocol: pinging idle connection to %s",
+		Connection_remoteAddr(tcpconn));
 	prdat->wrbuf[0] = CMD_PING;
 	Connection_write(tcpconn, prdat->wrbuf, 1, 0);
     }
@@ -278,11 +281,11 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 {
     (void)receiver;
 
-    logmsg(L_DEBUG, "protocol: received TCP data");
     Connection *tcpconn = sender;
     DataReceivedEventArgs *dra = args;
     TcpProtoData *prdat = Connection_data(tcpconn);
-    logfmt(L_DEBUG, "protocol: in state %d", prdat->state);
+    logfmt(L_DEBUG, "protocol: received TCP data from %s in local state %d",
+	    Connection_remoteAddr(tcpconn), prdat->state);
     prdat->idleTicks = 0;
     uint16_t dpos = 0;
     while (dpos < dra->size)
@@ -296,14 +299,16 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			&& dra->buf[dpos] != ARG_CLIENT) goto error;
 		if (sockserver && dra->buf[dpos] == ARG_SERVER)
 		{
-		    logmsg(L_INFO, "protocol: "
-			    "dropping connection to other sock server");
+		    logfmt(L_INFO, "protocol: "
+			    "dropping connection to other socket server at %s",
+			    Connection_remoteAddr(tcpconn));
 		    goto error;
 		}
 		if (!sockserver && dra->buf[dpos] == ARG_CLIENT)
 		{
-		    logmsg(L_INFO, "protocol: "
-			    "dropping connection to other sock client");
+		    logfmt(L_INFO, "protocol: "
+			    "dropping connection to other socket client at %s",
+			    Connection_remoteAddr(tcpconn));
 		    goto error;
 		}
 		++dpos;
@@ -560,6 +565,8 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
     {
 	if (tcpclient)
 	{
+	    logfmt(L_DEBUG, "protocol: rejecting second TCP connection from "
+		    "%s to socket server", Connection_remoteAddr(client));
 	    Event_register(Connection_dataSent(client), 0, busySent, 0);
 	    Connection_write(client, "busy.\n", 6, client);
 	    return;
