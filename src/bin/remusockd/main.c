@@ -4,6 +4,7 @@
 #include "protocol.h"
 #include "service.h"
 #include "syslog.h"
+#include "threadpool.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -14,15 +15,19 @@ static int dmain(void *data)
 
     Service_init(config);
     int rc = EXIT_FAILURE;
-    if (Protocol_init(config) >= 0)
+    if (ThreadPool_init() >= 0)
     {
-	if (config->daemonize)
+	if (Protocol_init(config) >= 0)
 	{
-	    setSyslogLogger(LOG_DAEMON, 0);
-	    daemon_launched();
+	    if (config->daemonize)
+	    {
+		setSyslogLogger(LOG_DAEMON, 0);
+		daemon_launched();
+	    }
+	    rc = Service_run();
+	    Protocol_done();
 	}
-	rc = Service_run();
-	Protocol_done();
+	ThreadPool_done();
     }
     Service_done();
     return rc;

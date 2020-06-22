@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 1
+#define _DEFAULT_SOURCE
 
 #include "daemon.h"
 #include "log.h"
