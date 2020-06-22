@@ -47,6 +47,7 @@ struct Server
     int fd[MAXSOCKS];
     enum saddrt st[MAXSOCKS];
     ConnectionCreateMode ccm;
+    int numericHosts;
     uint8_t nsocks;
 };
 
@@ -124,7 +125,7 @@ static void acceptConnection(void *receiver, void *sender, void *args)
     }
     else if (sa)
     {
-	Connection_setRemoteAddr(newconn, sa, salen, 0);
+	Connection_setRemoteAddr(newconn, sa, salen, self->numericHosts);
     }
     logfmt(L_DEBUG, "server: client connected from %s",
 	    Connection_remoteAddr(newconn));
@@ -132,7 +133,7 @@ static void acceptConnection(void *receiver, void *sender, void *args)
 }
 
 Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
-	ConnectionCreateMode mode, char *path)
+	ConnectionCreateMode mode, char *path, int numericHosts)
 {
     if (nsocks < 1 || nsocks > MAXSOCKS)
     {
@@ -147,6 +148,7 @@ Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
     self->conncapa = CONNCHUNK;
     self->connsize = 0;
     self->ccm = mode;
+    self->numericHosts = numericHosts;
     self->nsocks = nsocks;
     memcpy(self->fd, sockfd, nsocks * sizeof *sockfd);
     memcpy(self->st, st, nsocks * sizeof *st);
@@ -225,7 +227,8 @@ Server *Server_createTcp(const Config *config, ConnectionCreateMode mode)
 	return 0;
     }
     
-    Server *self = Server_create(nsocks, fd, st, mode, 0);
+    Server *self = Server_create(nsocks, fd, st, mode, 0,
+	    config->numericHosts);
     return self;
 }
 
@@ -311,7 +314,8 @@ Server *Server_createUnix(const Config *config, ConnectionCreateMode mode)
     }
 
     enum saddrt sat = ST_UNIX;
-    Server *self = Server_create(1, &fd, &sat, mode, copystr(addr.sun_path));
+    Server *self = Server_create(1, &fd, &sat, mode,
+	    copystr(addr.sun_path), config->numericHosts);
     return self;
 }
 

@@ -12,6 +12,7 @@ typedef struct Config
     int sockClient;
     int daemonize;
     int port;
+    int numericHosts;
     int sockmode;
 } Config;
 

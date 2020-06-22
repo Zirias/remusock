@@ -17,7 +17,7 @@
 
 static void usage(const char *prgname)
 {
-    fprintf(stderr, "Usage: %s [-cfv] [-b address]\n"
+    fprintf(stderr, "Usage: %s [-cfnv] [-b address]\n"
 	    "\t\t[-g group] [-m mode] [-p pidfile]\n"
 	    "\t\t[-r remotehost] [-u user] socket port\n",
 	    prgname);
@@ -30,6 +30,7 @@ static void usage(const char *prgname)
 	    "\t               default group of that user\n"
 	    "\t-m mode        permissions for the server socket in octal,\n"
 	    "\t               defaults to 600\n"
+	    "\t-n             numeric hosts, do not resolve remote addresses\n"
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
 	    "\t-u user        user name or id for the server socket\n"
@@ -168,6 +169,10 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 
 		    case 'f':
 			config->daemonize = 0;
+			break;
+
+		    case 'n':
+			config->numericHosts = 1;
 			break;
 
 		    case 'v':

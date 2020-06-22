@@ -64,7 +64,8 @@ Connection *Connection_createTcpClient(const Config *config)
 	return 0;
     }
     Connection *conn = Connection_create(fd, CCM_CONNECTING);
-    Connection_setRemoteAddr(conn, res->ai_addr, res->ai_addrlen, 0);
+    Connection_setRemoteAddr(conn, res->ai_addr, res->ai_addrlen,
+	    config->numericHosts);
     freeaddrinfo(res0);
     return conn;
 }
