@@ -1,14 +1,6 @@
 #include "syslog.h"
 #include "log.h"
 
-typedef struct
-{
-    int facility;
-    int withStderr;
-} SyslogOpts;
-
-SyslogOpts opts;
-
 static int syslogLevels[] =
 {
     LOG_CRIT,
@@ -20,14 +12,15 @@ static int syslogLevels[] =
 
 static void writeSyslog(LogLevel level, const char *message, void *data)
 {
-    SyslogOpts *so = data;
-    syslog(so->facility | syslogLevels[level], "%s", message);
-    if (so->withStderr) writeFile(level, message, stderr);
+    (void)data;
+    syslog(syslogLevels[level], "%s", message);
 }
 
-void setSyslogLogger(int facility, int withStderr)
+void setSyslogLogger(const char *ident, int facility, int withStderr)
 {
-    opts.facility = facility;
-    opts.withStderr = withStderr;
-    setCustomLogger(writeSyslog, &opts);
+    int logopts = LOG_PID;
+    if (withStderr) logopts |= LOG_PERROR;
+    openlog(ident, logopts, facility);
+    setCustomLogger(writeSyslog, 0);
 }
+

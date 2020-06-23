@@ -14,11 +14,11 @@ static int logsilent = 0;
 
 static const char *levels[] =
 {
-    "[FATAL]  ",
-    "[ERROR]  ",
-    "[WARN ]  ",
-    "[INFO ]  ",
-    "[DEBUG]  "
+    "[FATAL]",
+    "[ERROR]",
+    "[WARN ]",
+    "[INFO ]",
+    "[DEBUG]"
 };
 
 typedef struct LogJobArgs
@@ -36,12 +36,10 @@ static void logmsgJobProc(void *arg)
     free(lja);
 }
 
-void writeFile(LogLevel level, const char *message, void *data)
+static void writeFile(LogLevel level, const char *message, void *data)
 {
     FILE *target = data;
-    fputs(levels[level], target);
-    fputs(message, target);
-    fputc('\n', target);
+    fprintf(target, "%s  %s\n", levels[level], message);
     fflush(target);
 }
 

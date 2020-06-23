@@ -3,7 +3,7 @@
 
 #include <syslog.h>
 
-void setSyslogLogger(int facility, int withStderr);
+void setSyslogLogger(const char *ident, int facility, int withStderr);
 
 #endif
 

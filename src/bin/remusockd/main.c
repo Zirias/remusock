@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#define LOGIDENT "remusockd"
+
 static int dmain(void *data)
 {
     Config *config = data;
@@ -21,7 +23,7 @@ static int dmain(void *data)
 	{
 	    if (config->daemonize)
 	    {
-		setSyslogLogger(LOG_DAEMON, 0);
+		setSyslogLogger(LOGIDENT, LOG_DAEMON, 0);
 		daemon_launched();
 	    }
 	    rc = Service_run();
@@ -40,7 +42,7 @@ int main(int argc, char **argv)
 
     if (config.daemonize)
     {
-	setSyslogLogger(LOG_DAEMON, 1);
+	setSyslogLogger(LOGIDENT, LOG_DAEMON, 1);
 	return daemon_run(dmain, &config, config.pidfile, 1);
     }
     else
