@@ -55,6 +55,7 @@ void *worker(void *arg)
     if (pthread_mutex_lock(&t->mutex) < 0)
     {
 	t->failed = 1;
+	write(t->pipefd[1], "1", 1);
 	return 0;
     }
 
@@ -67,12 +68,14 @@ void *worker(void *arg)
     if (sigaction(SIGUSR1, &handler, 0) < 0)
     {
 	t->failed = 1;
+	write(t->pipefd[1], "1", 1);
 	return 0;
     }
 
     if (pthread_sigmask(SIG_UNBLOCK, &handler.sa_mask, 0) < 0)
     {
 	t->failed = 1;
+	write(t->pipefd[1], "1", 1);
 	return 0;
     }
 
@@ -82,7 +85,7 @@ void *worker(void *arg)
 	if (t->stoprq) break;
 	t->job->proc(t->job->arg);
 	if (t->stoprq) break;
-	write(t->pipefd[1], "1", 1);
+	write(t->pipefd[1], "0", 1);
     }
 
     return 0;
@@ -184,6 +187,17 @@ void threadJobDone(void *receiver, void *sender, void *args)
     Thread *t = receiver;
     char buf[2];
     read(t->pipefd[0], buf, sizeof buf);
+    if (t->failed)
+    {
+	pthread_join(t->handle, 0);
+	logmsg(L_WARNING, "threadpool: restarting failed thread");
+	if (pthread_create(&t->handle, 0, worker, t) < 0)
+	{
+	    logmsg(L_FATAL, "threadpool: error restarting thread");
+	    Service_quit();
+	}
+	return;
+    }
     Event_raise(t->job->finished, 0, t->job->arg);
     ThreadJob_destroy(t->job);
     t->job = 0;
@@ -240,14 +254,16 @@ int ThreadPool_init(void)
 	    logmsg(L_ERROR, "threadpool: error creating pipe");
 	    goto rollback_condvar;
 	}
+	Event_register(Service_readyRead(), threads+i, threadJobDone,
+		threads[i].pipefd[0]);
 	if (pthread_create(&threads[i].handle, 0, worker, threads+i) < 0)
 	{
 	    logmsg(L_ERROR, "threadpool: error creating thread");
+	    Event_unregister(Service_readyRead(), threads+i, threadJobDone,
+		    threads[i].pipefd[0]);
 	    goto rollback_pipe;
 	}
 	Service_registerRead(threads[i].pipefd[0]);
-	Event_register(Service_readyRead(), threads+i, threadJobDone,
-		threads[i].pipefd[0]);
 	continue;
 
 rollback_pipe:
