@@ -42,9 +42,7 @@ Connection *Connection_createTcpClient(const Config *config,
 	if (res->ai_family != AF_INET && res->ai_family != AF_INET6) continue;
 	fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 	if (fd < 0) continue;
-	int flags = fcntl(fd, F_GETFL, 0);
-	int nbflags = flags | O_NONBLOCK;
-	fcntl(fd, F_SETFL, nbflags);
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 	errno = 0;
 	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0
 		&& errno != EINPROGRESS)
@@ -52,11 +50,7 @@ Connection *Connection_createTcpClient(const Config *config,
 	    close(fd);
 	    fd = -1;
 	}
-	else
-	{
-	    fcntl(fd, F_SETFL, flags);
-	    break;
-	}
+	else break;
     }
     if (fd < 0)
     {
@@ -86,9 +80,7 @@ Connection *Connection_createUnixClient(const Config *config,
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, config->sockname, sizeof addr.sun_path - 1);
 
-    int flags = fcntl(fd, F_GETFL, 0);
-    int nbflags = flags | O_NONBLOCK;
-    fcntl(fd, F_SETFL, nbflags);
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     errno = 0;
     if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0
 	    && errno != EINPROGRESS)
@@ -97,7 +89,6 @@ Connection *Connection_createUnixClient(const Config *config,
 	close(fd);
 	return 0;
     }
-    fcntl(fd, F_SETFL, flags);
     Connection *conn = Connection_create(fd, CCM_CONNECTING, readOffset);
     Connection_setRemoteAddrStr(conn, addr.sun_path);
     return conn;

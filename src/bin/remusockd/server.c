@@ -10,6 +10,7 @@
 #include "util.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -112,6 +113,7 @@ static void acceptConnection(void *receiver, void *sender, void *args)
 	logmsg(L_WARNING, "server: failed to accept connection");
 	return;
     }
+    fcntl(connfd, F_SETFL, fcntl(connfd, F_GETFL, 0) | O_NONBLOCK);
     if (self->connsize == self->conncapa)
     {
 	self->conncapa += CONNCHUNK;
@@ -158,6 +160,7 @@ Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
     memcpy(self->st, st, nsocks * sizeof *st);
     for (uint8_t i = 0; i < nsocks; ++i)
     {
+	fcntl(sockfd[i], F_SETFL, fcntl(sockfd[i], F_GETFL, 0) | O_NONBLOCK);
 	Event_register(Service_readyRead(), self, acceptConnection, sockfd[i]);
 	Service_registerRead(sockfd[i]);
     }

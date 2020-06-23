@@ -8,6 +8,7 @@
 #include "threadpool.h"
 #include "util.h"
 
+#include <errno.h>
 #include <netdb.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -105,10 +106,11 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	return;
     }
     WriteRecord *rec = self->writerecs + self->baserecidx;
+    errno = 0;
     int rc = write(self->fd, rec->wrbuf + rec->wrbufpos,
 	    rec->wrbuflen - rec->wrbufpos);
     void *id = 0;
-    if (rc > 0)
+    if (rc >= 0)
     {
 	if (rc < rec->wrbuflen - rec->wrbufpos)
 	{
@@ -125,12 +127,19 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	{
 	    Event_raise(self->dataSent, 0, id);
 	}
+    }
+    else if (errno == EWOULDBLOCK || errno == EAGAIN)
+    {
+	logfmt(L_INFO, "connection: not ready for writing to %s",
+		Connection_remoteAddr(self));
 	return;
     }
-
-    logfmt(L_WARNING, "connection: error writing to %s",
-	    Connection_remoteAddr(self));
-    Event_raise(self->closed, 0, 0);
+    else
+    {
+	logfmt(L_WARNING, "connection: error writing to %s",
+		Connection_remoteAddr(self));
+	Event_raise(self->closed, 0, 0);
+    }
 }
 
 static void readConnection(void *receiver, void *sender, void *args)
@@ -149,6 +158,7 @@ static void readConnection(void *receiver, void *sender, void *args)
 	return;
     }
 
+    errno = 0;
     int rc = read(self->fd, self->rdbuf + self->readOffset,
 	    CONNBUFSZ - self->readOffset);
     if (rc > 0)
@@ -162,15 +172,21 @@ static void readConnection(void *receiver, void *sender, void *args)
 		    Connection_remoteAddr(self));
 	    Service_unregisterRead(self->fd);
 	}
-	return;
     }
-
-    if (rc < 0)
+    else if (errno == EWOULDBLOCK || errno == EAGAIN)
     {
-	logfmt(L_WARNING, "connection: error reading from %s",
+	logfmt(L_INFO, "connection: ignoring spurious read from %s",
 		Connection_remoteAddr(self));
     }
-    Event_raise(self->closed, 0, 0);
+    else
+    {
+	if (rc < 0)
+	{
+	    logfmt(L_WARNING, "connection: error reading from %s",
+		    Connection_remoteAddr(self));
+	}
+	Event_raise(self->closed, 0, 0);
+    }
 }
 
 static void deleteConnection(void *receiver, void *sender, void *args)
