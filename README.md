@@ -4,7 +4,7 @@ This package contain a single and simple daemon, `remusockd`, allowing to
 access a Unix domain socket on a remote machine.
 
 ```
-Usage: remusockd [-cfv] [-b address]
+Usage: remusockd [-cfnv] [-b address]
 		[-g group] [-m mode] [-p pidfile]
 		[-r remotehost] [-u user] socket port
 
@@ -17,6 +17,7 @@ Usage: remusockd [-cfv] [-b address]
 	               default group of that user
 	-m mode        permissions for the server socket in octal,
 	               defaults to 600
+	-n             numeric hosts, do not resolve remote addresses
 	-p pidfile     use `pidfile' instead of compile-time default
 	-r remotehost  connect to `remotehost' instead of listening
 	-u user        user name or id for the server socket
