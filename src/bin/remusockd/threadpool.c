@@ -79,15 +79,15 @@ void *worker(void *arg)
 	return 0;
     }
 
-    for (;;)
+    while (!t->stoprq)
     {
 	pthread_cond_wait(&t->start, &t->mutex);
 	if (t->stoprq) break;
 	t->job->proc(t->job->arg);
-	if (t->stoprq) break;
 	write(t->pipefd[1], "0", 1);
     }
 
+    pthread_mutex_unlock(&t->mutex);
     return 0;
 }
 
@@ -123,7 +123,7 @@ static void stopThreads(int nthreads)
 {
     for (int i = 0; i < nthreads; ++i)
     {
-	if (!threads[i].failed)
+	if (pthread_kill(threads[i].handle, 0) >= 0)
 	{
 	    threads[i].stoprq = 1;
 	    if (pthread_mutex_trylock(&threads[i].mutex) < 0)

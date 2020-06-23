@@ -11,6 +11,7 @@ static logwriter currentwriter = 0;
 static void *writerdata;
 static LogLevel maxlevel = L_INFO;
 static int logsilent = 0;
+static int logasync = 0;
 
 static const char *levels[] =
 {
@@ -48,7 +49,7 @@ void logmsg(LogLevel level, const char *message)
     if (!currentwriter) return;
     if (logsilent && level > L_ERROR) return;
     if (level > maxlevel) return;
-    if (ThreadPool_active())
+    if (logasync && ThreadPool_active())
     {
 	size_t msgsize = strlen(message)+1;
 	LogJobArgs *lja = xmalloc(sizeof *lja + msgsize);
@@ -78,6 +79,11 @@ void logfmt(LogLevel level, const char *format, ...)
 void logsetsilent(int silent)
 {
     logsilent = silent;
+}
+
+void logsetasync(int async)
+{
+    logasync = async;
 }
 
 void setFileLogger(FILE *file)
