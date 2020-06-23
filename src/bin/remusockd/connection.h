@@ -9,7 +9,8 @@
 typedef struct Connection Connection;
 typedef struct Event Event;
 
-Connection *Connection_create(int fd, ConnectionCreateMode mode);
+Connection *Connection_create(int fd, ConnectionCreateMode mode,
+	uint8_t readOffset);
 Event *Connection_connected(Connection *self);
 Event *Connection_closed(Connection *self);
 Event *Connection_dataReceived(Connection *self);

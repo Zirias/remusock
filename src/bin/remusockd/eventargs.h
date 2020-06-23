@@ -5,9 +5,10 @@
 
 typedef struct DataReceivedEventArgs
 {
-    const char *buf;
+    char *buf;
     int handling;
     uint16_t size;
+    uint8_t offset;
 } DataReceivedEventArgs;
 
 #endif

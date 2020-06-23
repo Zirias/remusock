@@ -49,6 +49,7 @@ struct Server
     ConnectionCreateMode ccm;
     int numericHosts;
     uint8_t nsocks;
+    uint8_t readOffset;
 };
 
 static void removeConnection(void *receiver, void *sender, void *args)
@@ -116,7 +117,8 @@ static void acceptConnection(void *receiver, void *sender, void *args)
 	self->conncapa += CONNCHUNK;
 	self->conn = xrealloc(self->conn, self->conncapa * sizeof *self->conn);
     }
-    Connection *newconn = Connection_create(connfd, self->ccm);
+    Connection *newconn = Connection_create(connfd, self->ccm,
+	    self->readOffset);
     self->conn[self->connsize++] = newconn;
     Event_register(Connection_closed(newconn), self, removeConnection, 0);
     if (self->path)
@@ -133,7 +135,8 @@ static void acceptConnection(void *receiver, void *sender, void *args)
 }
 
 Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
-	ConnectionCreateMode mode, char *path, int numericHosts)
+	ConnectionCreateMode mode, char *path, int numericHosts,
+	uint8_t readOffset)
 {
     if (nsocks < 1 || nsocks > MAXSOCKS)
     {
@@ -150,6 +153,7 @@ Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
     self->ccm = mode;
     self->numericHosts = numericHosts;
     self->nsocks = nsocks;
+    self->readOffset = readOffset;
     memcpy(self->fd, sockfd, nsocks * sizeof *sockfd);
     memcpy(self->st, st, nsocks * sizeof *st);
     for (uint8_t i = 0; i < nsocks; ++i)
@@ -161,7 +165,8 @@ Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
     return self;
 }
 
-Server *Server_createTcp(const Config *config, ConnectionCreateMode mode)
+Server *Server_createTcp(const Config *config, ConnectionCreateMode mode,
+	uint8_t readOffset)
 {
     int fd[MAXSOCKS];
     enum saddrt st[MAXSOCKS];
@@ -228,11 +233,12 @@ Server *Server_createTcp(const Config *config, ConnectionCreateMode mode)
     }
     
     Server *self = Server_create(nsocks, fd, st, mode, 0,
-	    config->numericHosts);
+	    config->numericHosts, readOffset);
     return self;
 }
 
-Server *Server_createUnix(const Config *config, ConnectionCreateMode mode)
+Server *Server_createUnix(const Config *config, ConnectionCreateMode mode,
+	uint8_t readOffset)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
@@ -258,7 +264,7 @@ Server *Server_createUnix(const Config *config, ConnectionCreateMode mode)
             return 0;
         }
 
-        Connection *client = Connection_createUnixClient(config);
+        Connection *client = Connection_createUnixClient(config, 0);
         if (client)
         {
             Connection_destroy(client);
@@ -315,7 +321,7 @@ Server *Server_createUnix(const Config *config, ConnectionCreateMode mode)
 
     enum saddrt sat = ST_UNIX;
     Server *self = Server_create(1, &fd, &sat, mode,
-	    copystr(addr.sun_path), config->numericHosts);
+	    copystr(addr.sun_path), config->numericHosts, readOffset);
     return self;
 }
 

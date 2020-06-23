@@ -14,7 +14,7 @@
 #include <string.h>
 
 #define LISTCHUNK 8
-#define PRDBUFSZ 16
+#define PRDBUFSZ 6
 
 #define CMD_IDENT   0x49
 #define CMD_PING    0x3f
@@ -255,15 +255,13 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
     ClientSpec *clspec = Connection_data(sockconn);
     if (clspec && clspec->tcpconn)
     {
-	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
 	dra->handling = 1;
-	prdat->wrbuf[0] = CMD_DATA;
-	prdat->wrbuf[1] = clspec->clientno >> 8;
-	prdat->wrbuf[2] = clspec->clientno & 0xff;
-	prdat->wrbuf[3] = dra->size >> 8;
-	prdat->wrbuf[4] = dra->size & 0xff;
-	Connection_write(clspec->tcpconn, prdat->wrbuf, 5, 0);
-	Connection_write(clspec->tcpconn, dra->buf, dra->size, sockconn);
+	dra->buf[0] = CMD_DATA;
+	dra->buf[1] = clspec->clientno >> 8;
+	dra->buf[2] = clspec->clientno & 0xff;
+	dra->buf[3] = dra->size >> 8;
+	dra->buf[4] = dra->size & 0xff;
+	Connection_write(clspec->tcpconn, dra->buf, dra->size + 5, sockconn);
     }
 }
 
@@ -364,7 +362,7 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 		    switch (prdat->rdbuf[0])
 		    {
 			case CMD_HELLO:
-			    sockclient = Connection_createUnixClient(cfg);
+			    sockclient = Connection_createUnixClient(cfg, 5);
 			    if (sockclient &&
 				    registerConnectionAt(tcpconn,
 					sockclient, clientno) == clientno)
@@ -542,7 +540,7 @@ static void tcpReconnect(void *receiver, void *sender, void *args)
     if (!--reconnWait)
     {
 	logmsg(L_DEBUG, "protocol: attempting to reconnect TCP");
-	pendingtcp = Connection_createTcpClient(cfg);
+	pendingtcp = Connection_createTcpClient(cfg, 0);
 	if (!pendingtcp)
 	{
 	    reconnWait = RECONNTICKS;
@@ -637,7 +635,7 @@ int Protocol_init(const Config *config)
     reconnTicking = 0;
     if (!config->sockClient)
     {
-	sockserver = Server_createUnix(config, CCM_WAIT);
+	sockserver = Server_createUnix(config, CCM_WAIT, 5);
 	if (!sockserver) return -1;
 	Event_register(Server_clientConnected(sockserver), 0,
 		sockClientConnected, 0);
@@ -646,7 +644,7 @@ int Protocol_init(const Config *config)
     }
     if (config->remotehost)
     {
-	pendingtcp = Connection_createTcpClient(config);
+	pendingtcp = Connection_createTcpClient(config, 0);
 	if (!pendingtcp)
 	{
 	    Server_destroy(sockserver);
@@ -661,7 +659,7 @@ int Protocol_init(const Config *config)
     }
     else
     {
-	tcpserver = Server_createTcp(config, CCM_NORMAL);
+	tcpserver = Server_createTcp(config, CCM_NORMAL, 0);
 	if (!tcpserver)
 	{
 	    Server_destroy(sockserver);

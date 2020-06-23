@@ -15,7 +15,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-Connection *Connection_createTcpClient(const Config *config)
+Connection *Connection_createTcpClient(const Config *config,
+	uint8_t readOffset)
 {
     if (!config->remotehost)
     {
@@ -63,14 +64,15 @@ Connection *Connection_createTcpClient(const Config *config)
 	logfmt(L_ERROR, "client: cannot connect to `%s'", config->remotehost);
 	return 0;
     }
-    Connection *conn = Connection_create(fd, CCM_CONNECTING);
+    Connection *conn = Connection_create(fd, CCM_CONNECTING, readOffset);
     Connection_setRemoteAddr(conn, res->ai_addr, res->ai_addrlen,
 	    config->numericHosts);
     freeaddrinfo(res0);
     return conn;
 }
 
-Connection *Connection_createUnixClient(const Config *config)
+Connection *Connection_createUnixClient(const Config *config,
+	uint8_t readOffset)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
@@ -96,7 +98,7 @@ Connection *Connection_createUnixClient(const Config *config)
 	return 0;
     }
     fcntl(fd, F_SETFL, flags);
-    Connection *conn = Connection_create(fd, CCM_CONNECTING);
+    Connection *conn = Connection_create(fd, CCM_CONNECTING, readOffset);
     Connection_setRemoteAddrStr(conn, addr.sun_path);
     return conn;
 }
