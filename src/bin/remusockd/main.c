@@ -25,8 +25,8 @@ static int dmain(void *data)
 	    {
 		setSyslogLogger(LOGIDENT, LOG_DAEMON, 0);
 		daemon_launched();
+		logsetasync(1);
 	    }
-	    logsetasync(1);
 	    rc = Service_run();
 	    Protocol_done();
 	}
