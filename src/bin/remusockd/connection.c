@@ -404,6 +404,15 @@ void Connection_destroy(Connection *self)
 
     Service_unregisterRead(self->fd);
     Service_unregisterWrite(self->fd);
+    for (; self->nrecs; --self->nrecs)
+    {
+	WriteRecord *rec = self->writerecs + self->baserecidx;
+	if (rec->id)
+	{
+	    Event_raise(self->dataSent, 0, rec->id);
+	}
+	if (++self->baserecidx == NWRITERECS) self->baserecidx = 0;
+    }
     if (self->deleteScheduled)
     {
 	Event_unregister(Service_eventsDone(), self, deleteConnection, 0);
