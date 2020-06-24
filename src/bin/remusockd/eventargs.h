@@ -5,7 +5,7 @@
 
 typedef struct DataReceivedEventArgs
 {
-    char *buf;
+    uint8_t *buf;
     int handling;
     uint16_t size;
     uint8_t offset;

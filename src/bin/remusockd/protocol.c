@@ -67,8 +67,8 @@ typedef struct TcpProtoData
     uint8_t idleTicks;
     uint8_t nwriteconns;
     uint8_t rdbufpos;
-    char wrbuf[PRDBUFSZ];
-    char rdbuf[PRDBUFSZ];
+    uint8_t wrbuf[PRDBUFSZ];
+    uint8_t rdbuf[PRDBUFSZ];
 } TcpProtoData;
 
 static TcpProtoData *TcpProtoData_create(void)
@@ -608,7 +608,7 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
 	    logfmt(L_DEBUG, "protocol: rejecting second TCP connection from "
 		    "%s to socket server", Connection_remoteAddr(client));
 	    Event_register(Connection_dataSent(client), 0, busySent, 0);
-	    Connection_write(client, "busy.\n", 6, client);
+	    Connection_write(client, (const uint8_t *)"busy.\n", 6, client);
 	    return;
 	}
 	tcpclient = client;

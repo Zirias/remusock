@@ -27,7 +27,7 @@ static char servbuf[NI_MAXSERV];
 
 typedef struct WriteRecord
 {
-    const char *wrbuf;
+    const uint8_t *wrbuf;
     void *id;
     uint16_t wrbuflen;
     uint16_t wrbufpos;
@@ -51,7 +51,7 @@ typedef struct Connection
     uint8_t nrecs;
     uint8_t baserecidx;
     uint8_t readOffset;
-    char rdbuf[CONNBUFSZ];
+    uint8_t rdbuf[CONNBUFSZ];
 } Connection;
 
 static void checkPendingConnection(void *receiver, void *sender, void *args)
@@ -341,7 +341,8 @@ void Connection_setRemoteAddrStr(Connection *self, const char *addr)
     self->addr = copystr(addr);
 }
 
-int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
+int Connection_write(Connection *self,
+	const uint8_t *buf, uint16_t sz, void *id)
 {
     if (self->nrecs == NWRITERECS) return -1;
     WriteRecord *rec = self->writerecs +

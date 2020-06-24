@@ -19,7 +19,8 @@ const char *Connection_remoteAddr(const Connection *self);
 void Connection_setRemoteAddr(Connection *self,
 	struct sockaddr *addr, socklen_t addrlen, int numericOnly);
 void Connection_setRemoteAddrStr(Connection *self, const char *addr);
-int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id);
+int Connection_write(Connection *self,
+	const uint8_t *buf, uint16_t sz, void *id);
 void Connection_activate(Connection *self);
 int Connection_confirmDataReceived(Connection *self);
 void Connection_close(Connection *self);
