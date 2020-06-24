@@ -90,7 +90,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	}
 	self->connecting = 0;
 	Service_registerRead(self->fd);
-	Service_unregisterWrite(self->fd);
+	if (!self->nrecs) Service_unregisterWrite(self->fd);
 	logfmt(L_DEBUG, "connection: connected to %s",
 		Connection_remoteAddr(self));
 	Event_raise(self->connected, 0, 0);
@@ -343,7 +343,7 @@ void Connection_setRemoteAddrStr(Connection *self, const char *addr)
 
 int Connection_write(Connection *self, const char *buf, uint16_t sz, void *id)
 {
-    if (self->connecting || self->nrecs == NWRITERECS) return -1;
+    if (self->nrecs == NWRITERECS) return -1;
     WriteRecord *rec = self->writerecs +
 	((self->baserecidx + self->nrecs++) % NWRITERECS);
     rec->wrbuflen = sz;

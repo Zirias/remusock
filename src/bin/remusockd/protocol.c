@@ -400,7 +400,14 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    break;
 			case CMD_CONNECT:
 			    client = connectionAt(tcpconn, clientno);
-			    if (!client) goto error;
+			    if (!client)
+			    {
+				logfmt(L_INFO, "protocol: ignored accepted "
+					"socket client from %s "
+					"(already closed)",
+					Connection_remoteAddr(tcpconn));
+				break;
+			    }
 			    sockclient = client->sockconn;
 			    logfmt(L_INFO, "protocol: remote socket client "
 				    "accepted from %s",
@@ -410,7 +417,14 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    break;
 			case CMD_BYE:
 			    client = connectionAt(tcpconn, clientno);
-			    if (!client) goto error;
+			    if (!client)
+			    {
+				logfmt(L_INFO, "protocol: ignored closed "
+					"socket client from %s "
+					"(already closed)",
+					Connection_remoteAddr(tcpconn));
+				break;
+			    }
 			    sockclient = client->sockconn;
 			    logfmt(L_INFO, "protocol: remote socket client "
 				    "from %s disconnected on %s",
