@@ -428,7 +428,6 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_DATA:
-			    if (!connectionAt(tcpconn, clientno)) goto error;
 			    prdat->clientno = clientno;
 			    prdat->rdexpect =
 				(prdat->rdbuf[3] << 8) | prdat->rdbuf[4];
@@ -454,7 +453,16 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 		    }
 		    dpos += chunksz;
 		    prdat->rdexpect -= chunksz;
-		    if (!prdat->rdexpect) prdat->state = TPS_DEFAULT;
+		    if (!prdat->rdexpect)
+		    {
+			prdat->state = TPS_DEFAULT;
+			if (!client)
+			{
+			    logfmt(L_INFO, "protocol: ignored data from %s "
+				    "for closed socket",
+				    Connection_remoteAddr(tcpconn));
+			}
+		    }
 		}
 		break;
 	}
