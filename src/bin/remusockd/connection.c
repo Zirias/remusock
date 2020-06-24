@@ -33,18 +33,31 @@ typedef struct WriteRecord
     uint16_t wrbufpos;
 } WriteRecord;
 
+typedef struct RemoteAddrResolveArgs
+{
+    union {
+	struct sockaddr sa;
+	struct sockaddr_storage ss;
+    };
+    socklen_t addrlen;
+    int rc;
+    char name[NI_MAXHOST];
+} RemoteAddrResolveArgs;
+
 typedef struct Connection
 {
     Event *connected;
     Event *closed;
     Event *dataReceived;
     Event *dataSent;
+    ThreadJob *resolveJob;
     char *addr;
     char *name;
     void *data;
     void (*deleter)(void *);
     WriteRecord writerecs[NWRITERECS];
     DataReceivedEventArgs args;
+    RemoteAddrResolveArgs resolveArgs;
     int fd;
     int connecting;
     uint8_t deleteScheduled;
@@ -207,6 +220,7 @@ Connection *Connection_create(int fd, ConnectionCreateMode mode,
     self->closed = Event_create(self);
     self->dataReceived = Event_create(self);
     self->dataSent = Event_create(self);
+    self->resolveJob = 0;
     self->fd = fd;
     self->connecting = 0;
     self->addr = 0;
@@ -260,19 +274,11 @@ const char *Connection_remoteAddr(const Connection *self)
     return self->addr;
 }
 
-typedef struct RemoteAddrResolveArgs
-{
-    struct sockaddr *addr;
-    socklen_t addrlen;
-    int rc;
-    char name[NI_MAXHOST];
-} RemoteAddrResolveArgs;
-
 static void resolveRemoteAddrProc(void *arg)
 {
     RemoteAddrResolveArgs *rara = arg;
     char buf[NI_MAXSERV];
-    rara->rc = getnameinfo(rara->addr, rara->addrlen,
+    rara->rc = getnameinfo(&rara->sa, rara->addrlen,
 	    rara->name, sizeof rara->name, buf, sizeof buf, NI_NUMERICSERV);
 }
 
@@ -307,8 +313,7 @@ static void resolveRemoteAddrFinished(void *receiver, void *sender, void *args)
 	logfmt(L_INFO, "connection: timeout resolving name for %s",
 		self->addr);
     }
-    free(rara->addr);
-    free(rara);
+    self->resolveJob = 0;
 }
 
 void Connection_setRemoteAddr(Connection *self,
@@ -320,17 +325,15 @@ void Connection_setRemoteAddr(Connection *self,
 		servbuf, sizeof servbuf, NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
     {
 	self->addr = copystr(hostbuf);
-	if (!numericOnly && ThreadPool_active())
+	if (!numericOnly && !self->resolveJob && ThreadPool_active())
 	{
-	    RemoteAddrResolveArgs *rara = xmalloc(sizeof *rara);
-	    rara->addr = xmalloc(addrlen);
-	    memcpy(rara->addr, addr, addrlen);
-	    rara->addrlen = addrlen;
-	    ThreadJob *job = ThreadJob_create(resolveRemoteAddrProc, rara,
-		    RESOLVTICKS);
-	    Event_register(ThreadJob_finished(job), self,
+	    memcpy(&self->resolveArgs.sa, addr, addrlen);
+	    self->resolveArgs.addrlen = addrlen;
+	    self->resolveJob = ThreadJob_create(resolveRemoteAddrProc,
+		    &self->resolveArgs, RESOLVTICKS);
+	    Event_register(ThreadJob_finished(self->resolveJob), self,
 		    resolveRemoteAddrFinished, 0);
-	    ThreadPool_enqueue(job);
+	    ThreadPool_enqueue(self->resolveJob);
 	}
     }
 }
@@ -421,6 +424,12 @@ void Connection_destroy(Connection *self)
     Event_unregister(Service_tick(), self, checkPendingConnection, 0);
     Event_unregister(Service_readyRead(), self, readConnection, self->fd);
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
+    if (self->resolveJob)
+    {
+	ThreadPool_cancel(self->resolveJob);
+	Event_unregister(ThreadJob_finished(self->resolveJob), self,
+		resolveRemoteAddrFinished, 0);
+    }
     close(self->fd);
     if (self->deleter) self->deleter(self->data);
     free(self->addr);

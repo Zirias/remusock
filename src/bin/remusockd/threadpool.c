@@ -312,6 +312,20 @@ int ThreadPool_enqueue(ThreadJob *job)
     return enqueueJob(job);
 }
 
+void ThreadPool_cancel(ThreadJob *job)
+{
+    if (!active) return;
+    for (int i = 0; i < NTHREADS; ++i)
+    {
+	if (threads[i].job == job)
+	{
+	    pthread_kill(threads[i].handle, SIGUSR1);
+	    threads[i].job->hasCompleted = 0;
+	    break;
+	}
+    }
+}
+
 void ThreadPool_done(void)
 {
     stopThreads(NTHREADS);

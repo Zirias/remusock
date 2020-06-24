@@ -13,6 +13,7 @@ int ThreadJob_hasCompleted(const ThreadJob *self);
 int ThreadPool_init(void);
 int ThreadPool_active(void);
 int ThreadPool_enqueue(ThreadJob *job);
+void ThreadPool_cancel(ThreadJob *job);
 void ThreadPool_done(void);
 
 #endif
