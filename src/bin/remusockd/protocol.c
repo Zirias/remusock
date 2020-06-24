@@ -211,6 +211,18 @@ static void tcpTick(void *receiver, void *sender, void *args)
     }
 }
 
+static void sendConnStateCmd(Connection *tcpconn, uint8_t cmd,
+	uint16_t clientno)
+{
+    logfmt(L_DEBUG, "protocol: sending %c %04x to %s", cmd,
+	    clientno, Connection_remoteAddr(tcpconn));
+    TcpProtoData *prdat = Connection_data(tcpconn);
+    prdat->wrbuf[0] = cmd;
+    prdat->wrbuf[1] = clientno >> 8;
+    prdat->wrbuf[2] = clientno & 0xff;
+    Connection_write(tcpconn, prdat->wrbuf, 3, 0);
+}
+
 static void sockConnectionLost(void *receiver, void *sender, void *args)
 {
     (void)receiver;
@@ -218,13 +230,11 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
 
     Connection *sock = sender;
     ClientSpec *client = Connection_data(sock);
+    logfmt(L_INFO, "protocol: lost socket connection to %s",
+	    Connection_remoteAddr(sock));
     if (client && client->tcpconn)
     {
-	TcpProtoData *prdat = Connection_data(client->tcpconn);
-	prdat->wrbuf[0] = CMD_BYE;
-	prdat->wrbuf[1] = client->clientno >> 8;
-	prdat->wrbuf[2] = client->clientno & 0xff;
-	Connection_write(client->tcpconn, prdat->wrbuf, 3, 0);
+	sendConnStateCmd(client->tcpconn, CMD_BYE, client->clientno);
 	unregisterConnection(client->tcpconn, sock);
     }
     Connection_deleteLater(sock);
@@ -239,11 +249,7 @@ static void sockConnectionEstablished(void *receiver, void *sender, void *args)
     ClientSpec *clspec = Connection_data(sockconn);
     if (clspec && clspec->tcpconn)
     {
-	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
-	prdat->wrbuf[0] = CMD_CONNECT;
-	prdat->wrbuf[1] = clspec->clientno >> 8;
-	prdat->wrbuf[2] = clspec->clientno & 0xff;
-	Connection_write(clspec->tcpconn, prdat->wrbuf, 3, 0);
+	sendConnStateCmd(clspec->tcpconn, CMD_CONNECT, clspec->clientno);
     }
 }
 
@@ -257,6 +263,9 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
     if (clspec && clspec->tcpconn)
     {
 	dra->handling = 1;
+	logfmt(L_DEBUG, "protocol: sending %c %04x %04x to %s", CMD_DATA,
+		clspec->clientno, dra->size,
+		Connection_remoteAddr(clspec->tcpconn));
 	dra->buf[0] = CMD_DATA;
 	dra->buf[1] = clspec->clientno >> 8;
 	dra->buf[2] = clspec->clientno & 0xff;
@@ -363,6 +372,9 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 		    switch (prdat->rdbuf[0])
 		    {
 			case CMD_HELLO:
+			    logfmt(L_DEBUG, "protocol: received %c %04x "
+				    "from %s", CMD_HELLO, clientno,
+				    Connection_remoteAddr(tcpconn));
 			    sockclient = Connection_createUnixClient(cfg, 5);
 			    if (sockclient &&
 				    registerConnectionAt(tcpconn,
@@ -391,14 +403,14 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 					"new remote socket client from %s",
 					Connection_remoteAddr(tcpconn));
 				if (sockclient) Connection_destroy(sockclient);
-				prdat->wrbuf[0] = CMD_BYE;
-				prdat->wrbuf[1] = prdat->rdbuf[1];
-				prdat->wrbuf[2] = prdat->rdbuf[2];
-				Connection_write(tcpconn, prdat->wrbuf, 3, 0);
+				sendConnStateCmd(tcpconn, CMD_BYE, clientno);
 			    }
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_CONNECT:
+			    logfmt(L_DEBUG, "protocol: received %c %04x "
+				    "from %s", CMD_CONNECT, clientno,
+				    Connection_remoteAddr(tcpconn));
 			    client = connectionAt(tcpconn, clientno);
 			    if (!client)
 			    {
@@ -416,6 +428,9 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_BYE:
+			    logfmt(L_DEBUG, "protocol: received %c %04x "
+				    "from %s", CMD_BYE, clientno,
+				    Connection_remoteAddr(tcpconn));
 			    client = connectionAt(tcpconn, clientno);
 			    if (!client)
 			    {
@@ -445,6 +460,10 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			    prdat->clientno = clientno;
 			    prdat->rdexpect =
 				(prdat->rdbuf[3] << 8) | prdat->rdbuf[4];
+			    logfmt(L_DEBUG, "protocol: received %c %04x %04x "
+				    "from %s", CMD_DATA, clientno,
+				    prdat->rdexpect,
+				    Connection_remoteAddr(tcpconn));
 			    prdat->state = TPS_RDDATA;
 			    break;
 		    }
@@ -622,12 +641,8 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     }
     Event_register(Connection_dataReceived(client), 0, sockDataReceived, 0);
     Event_register(Connection_dataSent(client), 0, sockDataSent, 0);
-    TcpProtoData *prdat = Connection_data(tcpclient);
     uint16_t clientno = registerConnection(tcpclient, client);
-    prdat->wrbuf[0] = CMD_HELLO;
-    prdat->wrbuf[1] = clientno >> 8;
-    prdat->wrbuf[2] = clientno & 0xff;
-    Connection_write(tcpclient, prdat->wrbuf, 3, 0);
+    sendConnStateCmd(tcpclient, CMD_HELLO, clientno);
 }
 
 static void sockClientDisconnected(void *receiver, void *sender, void *args)
@@ -641,11 +656,7 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
 	    Connection_remoteAddr(client));
     if (clspec && clspec->tcpconn)
     {
-	TcpProtoData *prdat = Connection_data(clspec->tcpconn);
-	prdat->wrbuf[0] = CMD_BYE;
-	prdat->wrbuf[1] = clspec->clientno >> 8;
-	prdat->wrbuf[2] = clspec->clientno & 0xff;
-	Connection_write(clspec->tcpconn, prdat->wrbuf, 3, 0);
+	sendConnStateCmd(clspec->tcpconn, CMD_BYE, clspec->clientno);
 	unregisterConnection(clspec->tcpconn, client);
     }
 }
