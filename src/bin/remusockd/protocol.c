@@ -225,6 +225,7 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
 	prdat->wrbuf[1] = client->clientno >> 8;
 	prdat->wrbuf[2] = client->clientno & 0xff;
 	Connection_write(client->tcpconn, prdat->wrbuf, 3, 0);
+	unregisterConnection(client->tcpconn, sock);
     }
     Connection_deleteLater(sock);
 }
