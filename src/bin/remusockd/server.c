@@ -1,6 +1,5 @@
 #define _DEFAULT_SOURCE
 
-#include "client.h"
 #include "config.h"
 #include "connection.h"
 #include "event.h"
@@ -16,6 +15,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -160,7 +160,6 @@ Server *Server_create(uint8_t nsocks, int *sockfd, enum saddrt *st,
     memcpy(self->st, st, nsocks * sizeof *st);
     for (uint8_t i = 0; i < nsocks; ++i)
     {
-	fcntl(sockfd[i], F_SETFL, fcntl(sockfd[i], F_GETFL, 0) | O_NONBLOCK);
 	Event_register(Service_readyRead(), self, acceptConnection, sockfd[i]);
 	Service_registerRead(sockfd[i]);
     }
@@ -194,6 +193,7 @@ Server *Server_createTcp(const Config *config, ConnectionCreateMode mode,
     {
 	if (res->ai_family != AF_INET && res->ai_family != AF_INET6) continue;
 	fd[nsocks] = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	fcntl(fd[nsocks], F_SETFL, fcntl(fd[nsocks], F_GETFL, 0) | O_NONBLOCK);
 	if (fd[nsocks] < 0)
 	{
 	    logmsg(L_ERROR, "server: cannot create socket");
@@ -249,6 +249,7 @@ Server *Server_createUnix(const Config *config, ConnectionCreateMode mode,
         logmsg(L_ERROR, "server: cannot create socket");
         return 0;
     }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof addr);
@@ -267,26 +268,40 @@ Server *Server_createUnix(const Config *config, ConnectionCreateMode mode,
             return 0;
         }
 
-        Connection *client = Connection_createUnixClient(config, 0);
-        if (client)
+	fd_set wfds;
+	FD_ZERO(&wfds);
+	FD_SET(fd, &wfds);
+	struct timeval tv;
+	memset(&tv, 0, sizeof tv);
+	tv.tv_usec = 300000U;
+	int sockerr = 0;
+	socklen_t sockerrlen = sizeof sockerr;
+	errno = 0;
+	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) >= 0
+		|| (errno == EINPROGRESS
+		    && select(fd + 1, 0, &wfds, 0, &tv) > 0
+		    && getsockopt(fd, SOL_SOCKET, SO_ERROR,
+			&sockerr, &sockerrlen) >= 0
+		    && !sockerr))
         {
-            Connection_destroy(client);
             logfmt(L_ERROR, "server: `%s' is already opened for listening",
                     addr.sun_path);
             close(fd);
             return 0;
         }
+	close(fd);
 
         if (unlink(addr.sun_path) < 0)
         {
             logfmt(L_ERROR, "server: cannot remove stale socket `%s'",
                     addr.sun_path);
-            close(fd);
             return 0;
         }
 
         logfmt(L_WARNING, "server: removed stale socket `%s'",
                 addr.sun_path);
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     }
     else if (errno != ENOENT)
     {
