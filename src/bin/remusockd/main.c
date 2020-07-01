@@ -5,6 +5,7 @@
 #include "service.h"
 #include "syslog.h"
 #include "threadpool.h"
+#include "util.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -27,6 +28,9 @@ static int dmain(void *data)
 		daemon_launched();
 		logsetasync(1);
 	    }
+	    char *cmdline = joinstr(" ", config->argv);
+	    logfmt(L_INFO, "starting with commandline: %s", cmdline);
+	    free(cmdline);
 	    rc = Service_run();
 	    Protocol_done();
 	}

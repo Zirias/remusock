@@ -3,6 +3,7 @@
 
 typedef struct Config
 {
+    char **argv;
     const char *pidfile;
     const char *sockname;
     const char *bindaddr;

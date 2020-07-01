@@ -218,7 +218,7 @@ int Service_run(void)
     }
 
     rc = EXIT_SUCCESS;
-    logmsg(L_INFO, "service starting");
+    logmsg(L_INFO, "service started");
     while (!shutdownRequest)
     {
 	Event_raise(eventsDone, 0, 0);

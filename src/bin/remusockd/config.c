@@ -219,6 +219,8 @@ next:	;
 	usage(prgname);
 	return -1;
     }
+
+    config->argv = argv;
     return 0;
 }
 

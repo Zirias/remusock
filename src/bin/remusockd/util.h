@@ -7,5 +7,6 @@
 void *xmalloc(size_t size);
 void *xrealloc(void *ptr, size_t size);
 char *copystr(const char *src);
+char *joinstr(const char *delim, char **strings);
 
 #endif
