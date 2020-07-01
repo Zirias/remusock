@@ -1,6 +1,6 @@
 ## remusock
 
-This package contain a single and simple daemon, `remusockd`, allowing to
+This package contains a single and simple daemon, `remusockd`, allowing to
 access a Unix domain socket on a remote machine.
 
 ```
