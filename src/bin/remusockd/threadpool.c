@@ -155,10 +155,14 @@ static int enqueueJob(ThreadJob *job)
 
 static ThreadJob *dequeueJob(void)
 {
-    if (queueAvail == QUEUESIZE) return 0;
-    ThreadJob *job = jobQueue[lastIdx++];
-    ++queueAvail;
-    if (lastIdx == QUEUESIZE) lastIdx = 0;
+    ThreadJob *job = 0;
+    while (!job)
+    {
+	if (queueAvail == QUEUESIZE) return 0;
+	job = jobQueue[lastIdx++];
+	++queueAvail;
+	if (lastIdx == QUEUESIZE) lastIdx = 0;
+    }
     return job;
 }
 
@@ -292,6 +296,13 @@ error:
 	return -1;
     }
 
+    for (int i = 0; i < NTHREADS; ++i)
+    {
+	ThreadJob *next = dequeueJob();
+	if (!next) break;
+	startThreadJob(threads + i, next);
+    }
+
     return rc;
 }
 
@@ -302,27 +313,47 @@ int ThreadPool_active(void)
 
 int ThreadPool_enqueue(ThreadJob *job)
 {
-    if (!active) return -1;
-    Thread *t = availableThread();
-    if (t)
+    if (active)
     {
-	startThreadJob(t, job);
-	return 0;
+	Thread *t = availableThread();
+	if (t)
+	{
+	    startThreadJob(t, job);
+	    return 0;
+	}
     }
     return enqueueJob(job);
 }
 
 void ThreadPool_cancel(ThreadJob *job)
 {
-    if (!active) return;
-    for (int i = 0; i < NTHREADS; ++i)
+    if (active)
     {
-	if (threads[i].job == job)
+	for (int i = 0; i < NTHREADS; ++i)
 	{
-	    pthread_kill(threads[i].handle, SIGUSR1);
-	    threads[i].job->hasCompleted = 0;
-	    break;
+	    if (threads[i].job == job)
+	    {
+		pthread_kill(threads[i].handle, SIGUSR1);
+		threads[i].job->hasCompleted = 0;
+		return;
+	    }
 	}
+    }
+    if (queueAvail != QUEUESIZE)
+    {
+	int i = lastIdx;
+	do
+	{
+	    if (jobQueue[i] == job)
+	    {
+		job->hasCompleted = 0;
+		Event_raise(job->finished, 0, job->arg);
+		ThreadJob_destroy(job);
+		jobQueue[i] = 0;
+		return;
+	    }
+	    if (++i == QUEUESIZE) i = 0;
+	} while ( i != nextIdx);
     }
 }
 
