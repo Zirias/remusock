@@ -3,13 +3,13 @@
 #include "daemon.h"
 #include "log.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 static int outfd;
@@ -20,16 +20,25 @@ int daemon_run(const daemon_main dmain, void *data,
     pid_t pid, sid;
     int rc = EXIT_FAILURE;
     FILE *pf = 0;
+    struct flock pflock;
     
     if (pidfile)
     {
 	pf = fopen(pidfile, "r");
 	if (pf)
 	{
+	    memset(&pflock, 0, sizeof pflock);
+	    pflock.l_type = F_RDLCK;
+	    pflock.l_whence = SEEK_SET;
+	    if (fcntl(fileno(pf), F_GETLK, &pflock) < 0)
+	    {
+		logfmt(L_ERROR, "error getting lock info on `%s'", pidfile);
+		goto done;
+	    }
 	    int prc = fscanf(pf, "%d", &pid);
 	    fclose(pf);
 	    pf = 0;
-	    if (prc < 1 || kill(pid, 0) < 0)
+	    if (pflock.l_type == F_UNLCK)
 	    {
 		logfmt(L_WARNING, "removing stale pidfile `%s'", pidfile);
 		if (unlink(pidfile) < 0)
@@ -40,7 +49,17 @@ int daemon_run(const daemon_main dmain, void *data,
 	    }
 	    else
 	    {
-		logmsg(L_ERROR, "daemon already running");
+		if (prc < 1 || pid != pflock.l_pid)
+		{
+		    if (prc < 1) pid = -1;
+		    logfmt(L_ERROR, "pidfile `%s' content (pid %d) and lock "
+			    "owner (pid %d) disagree! This should never "
+			    "happen, giving up!", pidfile, pid, pflock.l_pid);
+		}
+		else
+		{
+		    logmsg(L_ERROR, "daemon already running");
+		}
 		goto done;
 	    }
 	}
@@ -106,6 +125,17 @@ int daemon_run(const daemon_main dmain, void *data,
     sigaction(SIGSTOP, &handler, 0);
 #endif
 
+    if (pf)
+    {
+	memset(&pflock, 0, sizeof pflock);
+	pflock.l_type = F_WRLCK;
+	pflock.l_whence = SEEK_SET;
+	if (fcntl(fileno(pf), F_SETLK, &pflock) < 0)
+	{
+	    logfmt(L_ERROR, "locking own pidfile `%s' failed", pidfile);
+	    goto done;
+	}
+    }
     pid = fork();
 
     if (pid < 0)
@@ -126,8 +156,20 @@ int daemon_run(const daemon_main dmain, void *data,
 
     if (pf)
     {
-	fclose(pf);
-	pf = 0;
+	memset(&pflock, 0, sizeof pflock);
+	pflock.l_type = F_WRLCK;
+	pflock.l_whence = SEEK_SET;
+	int lrc;
+	do
+	{
+	    errno = 0;
+	    lrc = fcntl(fileno(pf), F_SETLKW, &pflock);
+	} while (lrc < 0 && errno == EINTR);
+	if (lrc < 0)
+	{
+	    logfmt(L_ERROR, "locking own pidfile `%s' failed", pidfile);
+	    goto done;
+	}
     }
 
     if (chdir("/") < 0)
@@ -174,6 +216,11 @@ int daemon_run(const daemon_main dmain, void *data,
 
     logmsg(L_INFO, "forked into background");
     rc = dmain(data);
+    if (pf)
+    {
+	fclose(pf);
+	pf = 0;
+    }
     if (pidfile) unlink(pidfile);
 
 done:
