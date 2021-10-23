@@ -14,62 +14,114 @@
 
 static int outfd;
 
+static FILE *openpidfile(const char *pidfile)
+{
+    struct flock pflock;
+    pid_t pid;
+
+    FILE *pf = fopen(pidfile, "r");
+    if (pf)
+    {
+	memset(&pflock, 0, sizeof pflock);
+	pflock.l_type = F_RDLCK;
+	pflock.l_whence = SEEK_SET;
+	if (fcntl(fileno(pf), F_GETLK, &pflock) < 0)
+	{
+	    logfmt(L_ERROR, "error getting lock info on `%s'", pidfile);
+	    return 0;
+	}
+	int locked = (pflock.l_type != F_UNLCK);
+	if (!locked)
+	{
+	    struct flock pfrdlock;
+	    memset(&pfrdlock, 0, sizeof pfrdlock);
+	    pfrdlock.l_type = F_RDLCK;
+	    pfrdlock.l_whence = SEEK_SET;
+	    if (fcntl(fileno(pf), F_SETLK, &pfrdlock) < 0)
+	    {
+		locked = 1;
+		memset(&pflock, 0, sizeof pflock);
+		pflock.l_type = F_RDLCK;
+		pflock.l_whence = SEEK_SET;
+		fcntl(fileno(pf), F_GETLK, &pflock);
+	    }
+	    else
+	    {
+		logfmt(L_WARNING, "removing stale pidfile `%s'", pidfile);
+		if (unlink(pidfile) < 0)
+		{
+		    logfmt(L_ERROR, "cannot remove `%s'", pidfile);
+		    return 0;
+		}
+		fclose(pf);
+	    }
+	}
+	if (locked)
+	{
+	    int prc = fscanf(pf, "%d", &pid);
+	    fclose(pf);
+	    if (prc < 1 || pid != pflock.l_pid)
+	    {
+		if (prc < 1) pid = -1;
+		logfmt(L_ERROR, "pidfile `%s' content (pid %d) and lock "
+			"owner (pid %d) disagree! This should never "
+			"happen, giving up!", pidfile, pid, pflock.l_pid);
+	    }
+	    else
+	    {
+		logmsg(L_ERROR, "daemon already running");
+	    }
+	    return 0;
+	}
+    }
+    pf = fopen(pidfile, "w");
+    if (!pf)
+    {
+	logfmt(L_ERROR, "cannot open pidfile `%s' for writing", pidfile);
+	return 0;
+    }
+    memset(&pflock, 0, sizeof pflock);
+    pflock.l_type = F_WRLCK;
+    pflock.l_whence = SEEK_SET;
+    if (fcntl(fileno(pf), F_SETLK, &pflock) < 0)
+    {
+	fclose(pf);
+	logfmt(L_ERROR, "locking own pidfile `%s' failed", pidfile);
+	return 0;
+    }
+
+    return pf;
+}
+
+static int waitpflock(FILE *pf, const char *pidfile)
+{
+    struct flock pflock;
+    int lrc;
+
+    memset(&pflock, 0, sizeof pflock);
+    pflock.l_type = F_WRLCK;
+    pflock.l_whence = SEEK_SET;
+    do
+    {
+	errno = 0;
+	lrc = fcntl(fileno(pf), F_SETLKW, &pflock);
+    } while (lrc < 0 && errno == EINTR);
+    if (lrc < 0)
+    {
+	logfmt(L_ERROR, "locking own pidfile `%s' failed", pidfile);
+	return -1;
+    }
+    return 0;
+}
+
 int daemon_run(const daemon_main dmain, void *data,
 	const char *pidfile, int waitLaunched)
 {
     pid_t pid, sid;
     int rc = EXIT_FAILURE;
     FILE *pf = 0;
-    struct flock pflock;
-    
-    if (pidfile)
-    {
-	pf = fopen(pidfile, "r");
-	if (pf)
-	{
-	    memset(&pflock, 0, sizeof pflock);
-	    pflock.l_type = F_RDLCK;
-	    pflock.l_whence = SEEK_SET;
-	    if (fcntl(fileno(pf), F_GETLK, &pflock) < 0)
-	    {
-		logfmt(L_ERROR, "error getting lock info on `%s'", pidfile);
-		goto done;
-	    }
-	    int prc = fscanf(pf, "%d", &pid);
-	    fclose(pf);
-	    pf = 0;
-	    if (pflock.l_type == F_UNLCK)
-	    {
-		logfmt(L_WARNING, "removing stale pidfile `%s'", pidfile);
-		if (unlink(pidfile) < 0)
-		{
-		    logfmt(L_ERROR, "cannot remove `%s'", pidfile);
-		    goto done;
-		}
-	    }
-	    else
-	    {
-		if (prc < 1 || pid != pflock.l_pid)
-		{
-		    if (prc < 1) pid = -1;
-		    logfmt(L_ERROR, "pidfile `%s' content (pid %d) and lock "
-			    "owner (pid %d) disagree! This should never "
-			    "happen, giving up!", pidfile, pid, pflock.l_pid);
-		}
-		else
-		{
-		    logmsg(L_ERROR, "daemon already running");
-		}
-		goto done;
-	    }
-	}
-	pf = fopen(pidfile, "w");
-	if (!pf)
-	{
-	    logfmt(L_ERROR, "cannot open pidfile `%s' for writing", pidfile);
-	    goto done;
-	}
-    }
+
+    if (pidfile && !(pf = openpidfile(pidfile))) goto done;
 
     int pfd[2];
     if (!waitLaunched || pipe(pfd) < 0)
@@ -92,6 +144,7 @@ int daemon_run(const daemon_main dmain, void *data,
     if (pid > 0)
     {
 	if (pfd[1] >= 0) close(pfd[1]);
+	if (pf) fclose(pf);
 	if (pfd[0] >= 0)
 	{
 	    char buf[256];
@@ -104,6 +157,9 @@ int daemon_run(const daemon_main dmain, void *data,
 	}
 	return EXIT_SUCCESS;
     }
+
+    if (pf && waitpflock(pf, pidfile) < 0) goto done;
+
     if (pfd[0] >= 0) close(pfd[0]);
 
     sid = setsid();
@@ -125,17 +181,6 @@ int daemon_run(const daemon_main dmain, void *data,
     sigaction(SIGSTOP, &handler, 0);
 #endif
 
-    if (pf)
-    {
-	memset(&pflock, 0, sizeof pflock);
-	pflock.l_type = F_WRLCK;
-	pflock.l_whence = SEEK_SET;
-	if (fcntl(fileno(pf), F_SETLK, &pflock) < 0)
-	{
-	    logfmt(L_ERROR, "locking own pidfile `%s' failed", pidfile);
-	    goto done;
-	}
-    }
     pid = fork();
 
     if (pid < 0)
@@ -154,23 +199,7 @@ int daemon_run(const daemon_main dmain, void *data,
 	return EXIT_SUCCESS;
     }
 
-    if (pf)
-    {
-	memset(&pflock, 0, sizeof pflock);
-	pflock.l_type = F_WRLCK;
-	pflock.l_whence = SEEK_SET;
-	int lrc;
-	do
-	{
-	    errno = 0;
-	    lrc = fcntl(fileno(pf), F_SETLKW, &pflock);
-	} while (lrc < 0 && errno == EINTR);
-	if (lrc < 0)
-	{
-	    logfmt(L_ERROR, "locking own pidfile `%s' failed", pidfile);
-	    goto done;
-	}
-    }
+    if (pf && waitpflock(pf, pidfile) < 0) goto done;
 
     if (chdir("/") < 0)
     {
