@@ -64,3 +64,40 @@ Usage: remusockd [-cfnv] [-b address]
    this assumes `make` is GNU make. You'll have to type `gmake` instead on
    a BSD system, for example.
 
+### FreeBSD port
+
+There's a FreeBSD port in my local ports tree (caution, it's rebased all the
+time) here: https://github.com/Zirias/zfbsd-ports/tree/local/net/remusock
+
+It contains an init-script that allows easy configuration in `/etc/rc.conf`.
+Here's what I use to make dovecot's auth socket available on a remote machine:
+
+```
+remusock_enable="YES"
+remusock_socket="/var/run/dovecot/auth-client"
+remusock_user="dovecot"
+remusock_remotehost="192.168.91.1"
+remusock_sockclient="YES"
+```
+
+### Linux/systemd
+
+Remusock doesn't integrate with `systemd` (and never will), but it's of course
+possible to create a "systemd unit" for it. I'll just cite myself here:
+
+```
+As I need the tool on a Debian box as well, I hacked together a systemd unit.
+I now feel like _not_ publishing it. systemd wants me to use a "simple" mode
+with the daemon running in foreground (which remusockd can do, of course),
+only problem is, there's no way to check for successful startup. systemd wants
+me to solve this by using a "notifying" mode where my daemon is supposed to
+call some systemd API (wtf? alternative: dbus. again: wtf?). I used the
+(strongly discouraged) "forking" mode instead, which works just fine with a
+well-behaved daemon. Then, for configuring the service, systemd wants me to
+use "snippets" in unit-syntax or something like that. Doesn't work for me, I
+just hardcoded the command line options I need for my usecase.
+
+It's just crap. Whoever wants to use remusock with systemd, please write your
+own unit file (and I recommend to use the "discouraged" forking mode).
+```
+
