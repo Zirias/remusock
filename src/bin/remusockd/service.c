@@ -28,8 +28,8 @@ static int nwrite;
 static int nfds;
 static int running;
 
-static sig_atomic_t shutdownRequest;
-static sig_atomic_t timerTick;
+static volatile sig_atomic_t shutdownRequest;
+static volatile sig_atomic_t timerTick;
 
 static struct itimerval timer;
 static struct itimerval otimer;
