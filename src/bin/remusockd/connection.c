@@ -273,6 +273,11 @@ const char *Connection_remoteAddr(const Connection *self)
     return self->addr;
 }
 
+const char *Connection_remoteHost(const Connection *self)
+{
+    return self->name;
+}
+
 static void resolveRemoteAddrProc(void *arg)
 {
     RemoteAddrResolveArgs *rara = arg;
@@ -292,14 +297,7 @@ static void resolveRemoteAddrFinished(void *receiver, void *sender, void *args)
 	if (rara->rc >= 0 && strcmp(rara->name, self->addr) != 0)
 	{
 	    logfmt(L_DEBUG, "connection: %s is %s", self->addr, rara->name);
-	    char *fullname = xmalloc(
-		    strlen(self->addr) + strlen(rara->name) + 4);
-	    strcpy(fullname, rara->name);
-	    strcat(fullname, " [");
-	    strcat(fullname, self->addr);
-	    strcat(fullname, "]");
-	    free(self->addr);
-	    self->addr = fullname;
+	    self->name = copystr(rara->name);
 	}
 	else
 	{
@@ -319,7 +317,9 @@ void Connection_setRemoteAddr(Connection *self,
 	struct sockaddr *addr, socklen_t addrlen, int numericOnly)
 {
     free(self->addr);
+    free(self->name);
     self->addr = 0;
+    self->name = 0;
     if (getnameinfo(addr, addrlen, hostbuf, sizeof hostbuf,
 		servbuf, sizeof servbuf, NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
     {
@@ -340,7 +340,9 @@ void Connection_setRemoteAddr(Connection *self,
 void Connection_setRemoteAddrStr(Connection *self, const char *addr)
 {
     free(self->addr);
+    free(self->name);
     self->addr = copystr(addr);
+    self->name = 0;
 }
 
 int Connection_write(Connection *self,

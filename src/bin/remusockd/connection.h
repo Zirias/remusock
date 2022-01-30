@@ -24,6 +24,7 @@ Event *Connection_closed(Connection *self);
 Event *Connection_dataReceived(Connection *self);
 Event *Connection_dataSent(Connection *self);
 const char *Connection_remoteAddr(const Connection *self);
+const char *Connection_remoteHost(const Connection *self);
 void Connection_setRemoteAddr(Connection *self,
 	struct sockaddr *addr, socklen_t addrlen, int numericOnly);
 void Connection_setRemoteAddrStr(Connection *self, const char *addr);
