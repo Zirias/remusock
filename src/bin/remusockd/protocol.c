@@ -2,7 +2,6 @@
 #include "config.h"
 #include "connection.h"
 #include "event.h"
-#include "eventargs.h"
 #include "log.h"
 #include "protocol.h"
 #include "server.h"

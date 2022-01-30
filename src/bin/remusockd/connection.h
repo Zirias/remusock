@@ -9,6 +9,14 @@
 typedef struct Connection Connection;
 typedef struct Event Event;
 
+typedef struct DataReceivedEventArgs
+{
+    uint8_t *buf;
+    int handling;
+    uint16_t size;
+    uint8_t offset;
+} DataReceivedEventArgs;
+
 Connection *Connection_create(int fd, ConnectionCreateMode mode,
 	uint8_t readOffset);
 Event *Connection_connected(Connection *self);

@@ -2,7 +2,6 @@
 
 #include "connection.h"
 #include "event.h"
-#include "eventargs.h"
 #include "log.h"
 #include "service.h"
 #include "threadpool.h"
