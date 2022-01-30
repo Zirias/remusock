@@ -292,7 +292,7 @@ static void resolveRemoteAddrFinished(void *receiver, void *sender, void *args)
     {
 	if (rara->rc >= 0 && strcmp(rara->name, self->addr) != 0)
 	{
-	    logfmt(L_INFO, "connection: %s is %s", self->addr, rara->name);
+	    logfmt(L_DEBUG, "connection: %s is %s", self->addr, rara->name);
 	    char *fullname = xmalloc(
 		    strlen(self->addr) + strlen(rara->name) + 4);
 	    strcpy(fullname, rara->name);
@@ -304,13 +304,13 @@ static void resolveRemoteAddrFinished(void *receiver, void *sender, void *args)
 	}
 	else
 	{
-	    logfmt(L_INFO, "connection: error resolving name for %s",
+	    logfmt(L_DEBUG, "connection: error resolving name for %s",
 		    self->addr);
 	}
     }
     else
     {
-	logfmt(L_INFO, "connection: timeout resolving name for %s",
+	logfmt(L_DEBUG, "connection: timeout resolving name for %s",
 		self->addr);
     }
     self->resolveJob = 0;
