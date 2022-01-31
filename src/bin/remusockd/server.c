@@ -65,7 +65,6 @@ static void removeConnection(void *receiver, void *sender, void *args)
 	{
 	    logfmt(L_DEBUG, "server: client disconnected from %s",
 		    Connection_remoteAddr(conn));
-	    Connection_deleteLater(conn);
 	    memmove(self->conn+pos, self->conn+pos+1,
 		    (self->connsize - pos) * sizeof *self->conn);
 	    --self->connsize;

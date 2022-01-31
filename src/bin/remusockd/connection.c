@@ -66,6 +66,8 @@ typedef struct Connection
     uint8_t rdbuf[CONNBUFSZ];
 } Connection;
 
+static void deleteLater(Connection *self);
+
 static void checkPendingConnection(void *receiver, void *sender, void *args)
 {
     (void)sender;
@@ -77,7 +79,7 @@ static void checkPendingConnection(void *receiver, void *sender, void *args)
 	logfmt(L_INFO, "connection: timeout connecting to %s",
 		Connection_remoteAddr(self));
 	Service_unregisterWrite(self->fd);
-	Event_raise(self->closed, 0, 0);
+	Connection_close(self);
     }
 }
 
@@ -97,7 +99,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
 	{
 	    logfmt(L_INFO, "connection: failed to connect to %s",
 		    Connection_remoteAddr(self));
-	    Event_raise(self->closed, 0, 0);
+	    Connection_close(self);
 	    return;
 	}
 	self->connecting = 0;
@@ -150,7 +152,7 @@ static void writeConnection(void *receiver, void *sender, void *args)
     {
 	logfmt(L_WARNING, "connection: error writing to %s",
 		Connection_remoteAddr(self));
-	Event_raise(self->closed, 0, 0);
+	Connection_close(self);
     }
 }
 
@@ -197,7 +199,7 @@ static void readConnection(void *receiver, void *sender, void *args)
 	    logfmt(L_WARNING, "connection: error reading from %s",
 		    Connection_remoteAddr(self));
 	}
-	Event_raise(self->closed, 0, 0);
+	Connection_close(self);
     }
 }
 
@@ -378,6 +380,7 @@ int Connection_confirmDataReceived(Connection *self)
 void Connection_close(Connection *self)
 {
     Event_raise(self->closed, 0, 0);
+    deleteLater(self);
 }
 
 void Connection_setData(Connection *self, void *data, void (*deleter)(void *))
@@ -392,11 +395,12 @@ void *Connection_data(const Connection *self)
     return self->data;
 }
 
-void Connection_deleteLater(Connection *self)
+static void deleteLater(Connection *self)
 {
     if (!self) return;
     if (!self->deleteScheduled)
     {
+	close(self->fd);
 	Event_register(Service_eventsDone(), self, deleteConnection, 0);
 	self->deleteScheduled = 1;
     }
@@ -422,6 +426,10 @@ void Connection_destroy(Connection *self)
     {
 	Event_unregister(Service_eventsDone(), self, deleteConnection, 0);
     }
+    else
+    {
+	close(self->fd);
+    }
     Event_unregister(Service_tick(), self, checkPendingConnection, 0);
     Event_unregister(Service_readyRead(), self, readConnection, self->fd);
     Event_unregister(Service_readyWrite(), self, writeConnection, self->fd);
@@ -431,7 +439,6 @@ void Connection_destroy(Connection *self)
 	Event_unregister(ThreadJob_finished(self->resolveJob), self,
 		resolveRemoteAddrFinished, 0);
     }
-    close(self->fd);
     if (self->deleter) self->deleter(self->data);
     free(self->addr);
     free(self->name);

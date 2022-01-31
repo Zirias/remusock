@@ -252,7 +252,6 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
 	sendConnStateCmd(client->tcpconn, CMD_BYE, client->clientno);
 	unregisterConnection(client->tcpconn, sock);
     }
-    Connection_deleteLater(sock);
 }
 
 static void sockConnectionEstablished(void *receiver, void *sender, void *args)
@@ -565,7 +564,6 @@ static void tcpConnectionLost(void *receiver, void *sender, void *args)
 	    pendingtcp = 0;
 	}
     }
-    Connection_deleteLater(conn);
 }
 
 static void tcpConnectionEstablished(void *receiver, void *sender, void *args)
