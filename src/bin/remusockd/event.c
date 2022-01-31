@@ -20,6 +20,7 @@ struct Event
     EvHandler *handlers;
     size_t size;
     size_t capa;
+    int dirty;
 };
 
 Event *Event_create(void *sender)
@@ -29,11 +30,29 @@ Event *Event_create(void *sender)
     self->handlers = 0;
     self->size = 0;
     self->capa = 0;
+    self->dirty = 0;
     return self;
 }
 
 void Event_register(Event *self, void *receiver, EventHandler handler, int id)
 {
+    if (self->dirty)
+    {
+	for (size_t pos = 0; pos < self->size; ++pos)
+	{
+	    if (!self->handlers[pos].handler)
+	    {
+		--self->size;
+		if (pos < self->size)
+		{
+		    memmove(self->handlers + pos, self->handlers + pos + 1,
+			    (self->size - pos) * sizeof *self->handlers);
+		}
+		--pos;
+	    }
+	}
+	self->dirty = 0;
+    }
     if (self->size == self->capa)
     {
         self->capa += EVCHUNKSIZE;
@@ -56,16 +75,9 @@ void Event_unregister(
                 && self->handlers[pos].handler == handler
 		&& self->handlers[pos].id == id)
         {
+	    self->handlers[pos].handler = 0;
+	    self->dirty = 1;
             break;
-        }
-    }
-    if (pos < self->size)
-    {
-        --self->size;
-        if (pos < self->size)
-        {
-            memmove(self->handlers + pos, self->handlers + pos + 1,
-                    (self->size - pos) * sizeof *self->handlers);
         }
     }
 }
@@ -74,7 +86,7 @@ void Event_raise(Event *self, int id, void *args)
 {
     for (size_t i = 0; i < self->size; ++i)
     {
-	if (self->handlers[i].id == id)
+	if (self->handlers[i].id == id && self->handlers[i].handler)
 	{
 	    if (!args && id) args = &id;
 	    self->handlers[i].handler(self->handlers[i].receiver,
