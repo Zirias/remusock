@@ -22,6 +22,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#ifndef MAXSOCKS
+#define MAXSOCKS (2*MAXBINDS)
+#endif
+
 #define CONNCHUNK 8
 
 static char hostbuf[NI_MAXHOST];
@@ -179,55 +183,77 @@ Server *Server_createTcp(const Config *config, ConnectionCreateMode mode,
     hints.ai_flags = AI_PASSIVE|AI_ADDRCONFIG|AI_NUMERICSERV;
     char portstr[6];
     snprintf(portstr, 6, "%d", config->port);
-    struct addrinfo *res0 = 0;
-    if (getaddrinfo(config->bindaddr, portstr, &hints, &res0) < 0 || !res0)
-    {
-        logmsg(L_ERROR, "server: cannot get address info");
-        return 0;
-    }
+
+    struct addrinfo *res0;
     int nsocks = 0;
+    int bi = 0;
     int opt_true = 1;
-    for (struct addrinfo *res = res0; res && nsocks < MAXSOCKS;
-	    res = res->ai_next)
+    do
     {
-	if (res->ai_family != AF_INET && res->ai_family != AF_INET6) continue;
-	fd[nsocks] = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	fcntl(fd[nsocks], F_SETFL, fcntl(fd[nsocks], F_GETFL, 0) | O_NONBLOCK);
-	if (fd[nsocks] < 0)
+	res0 = 0;
+	if (getaddrinfo(config->bindaddr[bi], portstr, &hints, &res0) < 0
+		|| !res0)
 	{
-	    logmsg(L_ERROR, "server: cannot create socket");
+	    logfmt(L_ERROR, "server: cannot get address info for `%s'",
+		    config->bindaddr[bi]);
 	    continue;
 	}
-	if (setsockopt(fd[nsocks], SOL_SOCKET, SO_REUSEADDR,
-		    &opt_true, sizeof opt_true) < 0)
+	for (struct addrinfo *res = res0; res && nsocks < MAXSOCKS;
+		res = res->ai_next)
 	{
-	    logmsg(L_ERROR, "server: cannot set socket option");
-	    close(fd[nsocks]);
-	    continue;
+	    if (res->ai_family != AF_INET && res->ai_family != AF_INET6)
+	    {
+		continue;
+	    }
+	    fd[nsocks] = socket(res->ai_family, res->ai_socktype,
+		    res->ai_protocol);
+	    if (fd[nsocks] < 0)
+	    {
+		logmsg(L_ERROR, "server: cannot create socket");
+		continue;
+	    }
+	    fcntl(fd[nsocks], F_SETFL,
+		    fcntl(fd[nsocks], F_GETFL, 0) | O_NONBLOCK);
+	    if (setsockopt(fd[nsocks], SOL_SOCKET, SO_REUSEADDR,
+			&opt_true, sizeof opt_true) < 0)
+	    {
+		logmsg(L_ERROR, "server: cannot set socket option");
+		close(fd[nsocks]);
+		continue;
+	    }
+#ifdef IPV6_V6ONLY
+	    if (res->ai_family == AF_INET6)
+	    {
+		setsockopt(fd[nsocks], IPPROTO_IPV6, IPV6_V6ONLY,
+			&opt_true, sizeof opt_true);
+	    }
+#endif
+	    if (bind(fd[nsocks], res->ai_addr, res->ai_addrlen) < 0)
+	    {
+		logmsg(L_ERROR, "server: cannot bind to specified address");
+		close(fd[nsocks]);
+		continue;
+	    }
+	    if (listen(fd[nsocks], 8) < 0)
+	    {
+		logmsg(L_ERROR, "server: cannot listen on socket");
+		close(fd[nsocks]);
+		continue;
+	    }
+	    const char *addrstr = "<unknown>";
+	    if (getnameinfo(res->ai_addr, res->ai_addrlen,
+			hostbuf, sizeof hostbuf,
+			servbuf, sizeof servbuf,
+			NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
+	    {
+		addrstr = hostbuf;
+	    }
+	    logfmt(L_INFO, "server: listening on %s port %s",
+		    addrstr, portstr);
+	    st[nsocks++] = res->ai_family == AF_INET ? ST_INET : ST_INET6;
 	}
-	if (bind(fd[nsocks], res->ai_addr, res->ai_addrlen) < 0)
-	{
-	    logmsg(L_ERROR, "server: cannot bind to specified address");
-	    close(fd[nsocks]);
-	    continue;
-	}
-	if (listen(fd[nsocks], 8) < 0)
-	{   
-	    logmsg(L_ERROR, "server: cannot listen on socket");
-	    close(fd[nsocks]);
-	    continue;
-	}
-	const char *addrstr = "<unknown>";
-	if (getnameinfo(res->ai_addr, res->ai_addrlen, hostbuf, sizeof hostbuf,
-		    servbuf, sizeof servbuf,
-		    NI_NUMERICHOST|NI_NUMERICSERV) >= 0)
-	{
-	    addrstr = hostbuf;
-	}
-	logfmt(L_INFO, "server: listening on %s", addrstr);
-	st[nsocks++] = res->ai_family == AF_INET ? ST_INET : ST_INET6;
-    }
-    freeaddrinfo(res0);
+	freeaddrinfo(res0);
+    } while (++bi < MAXBINDS && config->bindaddr[bi]);
     if (!nsocks)
     {
 	logmsg(L_ERROR, "server: could not create any socket");

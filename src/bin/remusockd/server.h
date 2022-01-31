@@ -5,8 +5,6 @@
 
 #include <stdint.h>
 
-#define MAXSOCKS 4
-
 typedef struct Config Config;
 typedef struct Event Event;
 typedef struct Server Server;

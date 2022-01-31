@@ -15,6 +15,9 @@
 #define PIDFILE "/var/run/remusockd.pid"
 #endif
 
+#define STR(m) XSTR(m)
+#define XSTR(m) #m
+
 static void usage(const char *prgname)
 {
     fprintf(stderr, "Usage: %s [-cfnv] [-b address]\n"
@@ -23,6 +26,7 @@ static void usage(const char *prgname)
 	    prgname);
     fputs("\n\t-b address     when listening, only bind to this address\n"
 	    "\t               instead of any\n"
+	    "\t               (can be given up to " STR(MAXBINDS) " times)\n"
 	    "\t-c             open unix domain socket as client\n"
 	    "\t-f             run in foreground\n"
 	    "\t-g group       group name or id for the server socket,\n"
@@ -73,10 +77,19 @@ static int longArg(long *setting, char *op)
 static int optArg(Config *config, char *args, int *idx, char *op)
 {
     if (!*idx) return -1;
+    int i;
     switch (args[--*idx])
     {
 	case 'b':
-	    config->bindaddr = op;
+	    for (i = 0; i < MAXBINDS; ++i)
+	    {
+		if (!config->bindaddr[i])
+		{
+		    config->bindaddr[i] = op;
+		    break;
+		}
+	    }
+	    if (i == MAXBINDS) return -1;
 	    break;
 	case 'g':
 	    if (longArg(&config->sockgid, op) < 0)
@@ -122,6 +135,8 @@ int Config_fromOpts(Config *config, int argc, char **argv)
     int arg;
     int naidx = 0;
     char needargs[ARGBUFSZ];
+    const char onceflags[] = "cfgmnpruv";
+    char seen[sizeof onceflags - 1] = {0};
 
     memset(config, 0, sizeof *config);
     config->pidfile = PIDFILE;
@@ -152,6 +167,17 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 
 	    for (++o; *o; ++o)
 	    {
+		const char *sip = strchr(onceflags, *o);
+		if (sip)
+		{
+		    int si = (int)(sip - onceflags);
+		    if (seen[si])
+		    {
+			usage(prgname);
+			return -1;
+		    }
+		    seen[si] = 1;
+		}
 		switch (*o)
 		{
 		    case 'b':
