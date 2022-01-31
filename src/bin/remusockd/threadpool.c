@@ -12,8 +12,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#define NTHREADS 4
-#define QUEUESIZE 16
+#define NTHREADS 8
+#define QUEUESIZE 64
 
 struct ThreadJob
 {
@@ -28,8 +28,10 @@ typedef struct Thread
 {
     ThreadJob *job;
     pthread_t handle;
-    pthread_mutex_t mutex;
+    pthread_mutex_t startlock;
+    pthread_mutex_t donelock;
     pthread_cond_t start;
+    pthread_cond_t done;
     int pipefd[2];
     int failed;
     int stoprq;
@@ -41,10 +43,12 @@ static int queueAvail;
 static int nextIdx;
 static int lastIdx;
 static int active;
+static volatile __thread sig_atomic_t jobcanceled;
 
 void workerInterrupt(int signum)
 {
     (void) signum;
+    jobcanceled = 1;
 }
 
 void *worker(void *arg)
@@ -52,7 +56,7 @@ void *worker(void *arg)
     Thread *t = arg;
     t->failed = 0;
     t->stoprq = 0;
-    if (pthread_mutex_lock(&t->mutex) < 0)
+    if (pthread_mutex_lock(&t->startlock) < 0)
     {
 	t->failed = 1;
 	write(t->pipefd[1], "1", 1);
@@ -81,13 +85,17 @@ void *worker(void *arg)
 
     while (!t->stoprq)
     {
-	pthread_cond_wait(&t->start, &t->mutex);
+	pthread_cond_wait(&t->start, &t->startlock);
 	if (t->stoprq) break;
+	jobcanceled = 0;
 	t->job->proc(t->job->arg);
 	write(t->pipefd[1], "0", 1);
+	pthread_mutex_lock(&t->donelock);
+	pthread_cond_signal(&t->done);
+	pthread_mutex_unlock(&t->donelock);
     }
 
-    pthread_mutex_unlock(&t->mutex);
+    pthread_mutex_unlock(&t->startlock);
     return 0;
 }
 
@@ -119,28 +127,39 @@ void ThreadJob_destroy(ThreadJob *self)
     free(self);
 }
 
+int ThreadJob_canceled(void)
+{
+    return (int)jobcanceled;
+}
+
 static void stopThreads(int nthreads)
 {
     for (int i = 0; i < nthreads; ++i)
     {
 	if (pthread_kill(threads[i].handle, 0) >= 0)
 	{
-	    threads[i].stoprq = 1;
-	    if (pthread_mutex_trylock(&threads[i].mutex) < 0)
+	    if (threads[i].job)
 	    {
+		threads[i].stoprq = 1;
 		pthread_kill(threads[i].handle, SIGUSR1);
+		pthread_cond_wait(&threads[i].done, &threads[i].donelock);
+		pthread_mutex_unlock(&threads[i].donelock);
 	    }
 	    else
 	    {
-		pthread_mutex_unlock(&threads[i].mutex);
+		pthread_mutex_lock(&threads[i].startlock);
+		threads[i].stoprq = 1;
 		pthread_cond_signal(&threads[i].start);
+		pthread_mutex_unlock(&threads[i].startlock);
 	    }
 	}
 	pthread_join(threads[i].handle, 0);
 	close(threads[i].pipefd[0]);
 	close(threads[i].pipefd[1]);
+	pthread_cond_destroy(&threads[i].done);
+	pthread_mutex_destroy(&threads[i].donelock);
 	pthread_cond_destroy(&threads[i].start);
-	pthread_mutex_destroy(&threads[i].mutex);
+	pthread_mutex_destroy(&threads[i].startlock);
     }
 }
 
@@ -177,10 +196,11 @@ static Thread *availableThread(void)
 
 static void startThreadJob(Thread *t, ThreadJob *j)
 {
-    pthread_mutex_lock(&t->mutex);
+    pthread_mutex_lock(&t->startlock);
     t->job = j;
-    pthread_mutex_unlock(&t->mutex);
     pthread_cond_signal(&t->start);
+    pthread_mutex_lock(&t->donelock);
+    pthread_mutex_unlock(&t->startlock);
 }
 
 void threadJobDone(void *receiver, void *sender, void *args)
@@ -202,9 +222,11 @@ void threadJobDone(void *receiver, void *sender, void *args)
 	}
 	return;
     }
+    pthread_cond_wait(&t->done, &t->donelock);
     Event_raise(t->job->finished, 0, t->job->arg);
     ThreadJob_destroy(t->job);
     t->job = 0;
+    pthread_mutex_unlock(&t->donelock);
     ThreadJob *next = dequeueJob();
     if (next) startThreadJob(t, next);
 }
@@ -243,7 +265,7 @@ int ThreadPool_init(void)
 
     for (int i = 0; i < NTHREADS; ++i)
     {
-	if (pthread_mutex_init(&threads[i].mutex, 0) < 0)
+	if (pthread_mutex_init(&threads[i].startlock, 0) < 0)
 	{
 	    logmsg(L_ERROR, "threadpool: error creating mutex");
 	    goto rollback;
@@ -251,12 +273,22 @@ int ThreadPool_init(void)
 	if (pthread_cond_init(&threads[i].start, 0) < 0)
 	{
 	    logmsg(L_ERROR, "threadpool: error creating condition variable");
-	    goto rollback_mutex;
+	    goto rollback_startlock;
+	}
+	if (pthread_mutex_init(&threads[i].donelock, 0) < 0)
+	{
+	    logmsg(L_ERROR, "threadpool: error creating mutex");
+	    goto rollback_start;
+	}
+	if (pthread_cond_init(&threads[i].done, 0) < 0)
+	{
+	    logmsg(L_ERROR, "threadpool: error creating condition variable");
+	    goto rollback_donelock;
 	}
 	if (pipe(threads[i].pipefd) < 0)
 	{
 	    logmsg(L_ERROR, "threadpool: error creating pipe");
-	    goto rollback_condvar;
+	    goto rollback_done;
 	}
 	Event_register(Service_readyRead(), threads+i, threadJobDone,
 		threads[i].pipefd[0]);
@@ -273,10 +305,14 @@ int ThreadPool_init(void)
 rollback_pipe:
 	close(threads[i].pipefd[0]);
 	close(threads[i].pipefd[1]);
-rollback_condvar:
+rollback_done:
+	pthread_cond_destroy(&threads[i].done);
+rollback_donelock:
+	pthread_mutex_destroy(&threads[i].donelock);
+rollback_start:
 	pthread_cond_destroy(&threads[i].start);
-rollback_mutex:
-	pthread_mutex_destroy(&threads[i].mutex);
+rollback_startlock:
+	pthread_mutex_destroy(&threads[i].startlock);
 rollback:
 	stopThreads(i);
 	goto error;
