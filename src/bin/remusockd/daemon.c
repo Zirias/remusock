@@ -145,17 +145,24 @@ int daemon_run(const daemon_main dmain, void *data,
     {
 	if (pfd[1] >= 0) close(pfd[1]);
 	if (pf) fclose(pf);
+	int drc = EXIT_SUCCESS;
 	if (pfd[0] >= 0)
 	{
 	    char buf[256];
 	    ssize_t sz;
 	    while ((sz = read(pfd[0], buf, sizeof buf)) > 0)
 	    {
+		if (!buf[sz-1])
+		{
+		    drc = EXIT_FAILURE;
+		    if (sz > 1) write(STDERR_FILENO, buf, sz-1);
+		    break;
+		}
 		write(STDERR_FILENO, buf, sz);
 	    }
 	    close(pfd[0]);
 	}
-	return EXIT_SUCCESS;
+	return drc;
     }
 
     if (pf && waitpflock(pf, pidfile) < 0) goto done;
@@ -245,6 +252,7 @@ int daemon_run(const daemon_main dmain, void *data,
 
     logmsg(L_INFO, "forked into background");
     rc = dmain(data);
+    if (rc != EXIT_SUCCESS) write(STDERR_FILENO, "\0", 1);
     if (pf)
     {
 	fclose(pf);
