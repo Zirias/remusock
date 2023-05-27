@@ -1,9 +1,9 @@
 #include "config.h"
-#include "log.h"
 
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
+#include <poser/core/log.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -202,7 +202,7 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 			break;
 
 		    case 'v':
-			setMaxLogLevel(L_DEBUG);
+			PSC_Log_setMaxLogLevel(PSC_L_DEBUG);
 			break;
 
 		    default:

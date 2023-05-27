@@ -1,5 +1,7 @@
-remusockd_MODULES:= main daemon log syslog config util event service \
-	threadpool connection server client protocol
-remusockd_LDFLAGS:= -pthread
-$(call binrules, remusockd)
+remusockd_MODULES:=	config \
+			main \
+			protocol
 
+remusockd_PKGDEPS:=	posercore
+
+$(call binrules, remusockd)

@@ -1,43 +1,35 @@
 #include "config.h"
-#include "daemon.h"
-#include "log.h"
 #include "protocol.h"
-#include "service.h"
-#include "syslog.h"
-#include "threadpool.h"
-#include "util.h"
 
+#include <poser/core.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #define LOGIDENT "remusockd"
 
-static int dmain(void *data)
+static void startup(void *receiver, void *sender, void *args)
 {
-    Config *config = data;
+    (void)sender;
 
-    Service_init(config);
-    int rc = EXIT_FAILURE;
-    if (ThreadPool_init() >= 0)
+    Config *config = receiver;
+    if (Protocol_init(config) < 0)
     {
-	if (Protocol_init(config) >= 0)
-	{
-	    if (config->daemonize)
-	    {
-		setSyslogLogger(LOGIDENT, LOG_DAEMON, 0);
-		daemon_launched();
-		logsetasync(1);
-	    }
-	    char *cmdline = joinstr(" ", config->argv);
-	    logfmt(L_INFO, "starting with commandline: %s", cmdline);
-	    free(cmdline);
-	    rc = Service_run();
-	    Protocol_done();
-	}
-	ThreadPool_done();
+	PSC_EAStartup_return(args, EXIT_FAILURE);
     }
-    Service_done();
-    return rc;
+    else
+    {
+	char *cmdline = PSC_joinstr(" ", config->argv);
+	PSC_Log_fmt(PSC_L_INFO, "starting with commandline: %s", cmdline);
+	free(cmdline);
+    }
+}
+
+static void shutdown(void *receiver, void *sender, void *args)
+{
+    (void)receiver;
+    (void)sender;
+    (void)args;
+
+    Protocol_done();
 }
 
 int main(int argc, char **argv)
@@ -45,15 +37,14 @@ int main(int argc, char **argv)
     Config config;
     if (Config_fromOpts(&config, argc, argv) < 0) return EXIT_FAILURE;
 
-    if (config.daemonize)
-    {
-	setSyslogLogger(LOGIDENT, LOG_DAEMON, 1);
-	return daemon_run(dmain, &config, config.pidfile, 1);
-    }
-    else
-    {
-	setFileLogger(stderr);
-	return dmain(&config);
-    }
+    PSC_RunOpts_init(config.pidfile);
+    PSC_RunOpts_runas(config.sockuid, config.sockgid);
+    PSC_RunOpts_enableDefaultLogging(LOGIDENT);
+    if (!config.daemonize) PSC_RunOpts_foreground();
+
+    PSC_Event_register(PSC_Service_prestartup(), &config, startup, 0);
+    PSC_Event_register(PSC_Service_shutdown(), 0, shutdown, 0);
+
+    return PSC_Service_run();
 }
 

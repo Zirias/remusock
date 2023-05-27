@@ -1,13 +1,7 @@
-#include "client.h"
 #include "config.h"
-#include "connection.h"
-#include "event.h"
-#include "log.h"
 #include "protocol.h"
-#include "server.h"
-#include "service.h"
-#include "util.h"
 
+#include <poser/core.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,18 +28,19 @@
 
 static const Config *cfg;
 
-static Server *sockserver;
-static Server *tcpserver;
-static Connection *tcpclient;
-static Connection *pendingtcp;
+static PSC_Server *sockserver;
+static PSC_Server *tcpserver;
+static PSC_Connection *tcpclient;
+static PSC_Connection *pendingtcp;
+static PSC_TcpClientOpts *tcpopts;
 static int reconnWait;
 static int reconnTicking;
 static char connrmbuf[CONNRMBUFSZ];
 
 typedef struct ClientSpec
 {
-    Connection *tcpconn;
-    Connection *sockconn;
+    PSC_Connection *tcpconn;
+    PSC_Connection *sockconn;
     uint16_t clientno;
 } ClientSpec;
 
@@ -72,10 +67,10 @@ typedef struct TcpProtoData
     uint8_t rdbuf[PRDBUFSZ];
 } TcpProtoData;
 
-static const char *connRemote(const Connection *conn)
+static const char *connRemote(const PSC_Connection *conn)
 {
-    const char *remAddr = Connection_remoteAddr(conn);
-    const char *remHost = Connection_remoteHost(conn);
+    const char *remAddr = PSC_Connection_remoteAddr(conn);
+    const char *remHost = PSC_Connection_remoteHost(conn);
     if (remAddr && remHost)
     {
 	snprintf(connrmbuf, CONNRMBUFSZ, "%s [%s]", remHost, remAddr);
@@ -88,8 +83,8 @@ static const char *connRemote(const Connection *conn)
 
 static TcpProtoData *TcpProtoData_create(void)
 {
-    TcpProtoData *self = xmalloc(sizeof *self);
-    self->clients = xmalloc(LISTCHUNK * sizeof *self->clients);
+    TcpProtoData *self = PSC_malloc(sizeof *self);
+    self->clients = PSC_malloc(LISTCHUNK * sizeof *self->clients);
     self->state = TPS_IDENT;
     self->size = 0;
     self->capa = LISTCHUNK;
@@ -100,10 +95,10 @@ static TcpProtoData *TcpProtoData_create(void)
     return self;
 }
 
-static uint16_t registerConnectionAt(Connection *tcpconn,
-	Connection *sockconn, uint16_t pos)
+static uint16_t registerConnectionAt(PSC_Connection *tcpconn,
+	PSC_Connection *sockconn, uint16_t pos)
 {
-    TcpProtoData *prdat = Connection_data(tcpconn);
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
     if (pos < prdat->size && prdat->clients[pos]) return 0xffff;
     if (pos >= prdat->capa)
     {
@@ -115,23 +110,24 @@ static uint16_t registerConnectionAt(Connection *tcpconn,
 	    }
 	    prdat->capa += LISTCHUNK;
 	}
-	prdat->clients = xrealloc(prdat->clients,
+	prdat->clients = PSC_realloc(prdat->clients,
 		prdat->capa * sizeof *prdat->clients);
 	memset(prdat->clients + prdat->size, 0, prdat->capa - prdat->size);
     }
-    ClientSpec *clspec = xmalloc(sizeof *clspec);
+    ClientSpec *clspec = PSC_malloc(sizeof *clspec);
     clspec->tcpconn = tcpconn;
     clspec->sockconn = sockconn;
     clspec->clientno = pos;
     prdat->clients[pos] = clspec;
-    Connection_setData(sockconn, clspec, 0);
+    PSC_Connection_setData(sockconn, clspec, 0);
     if (pos >= prdat->size) prdat->size = pos+1;
     return pos;
 }
 
-static uint16_t registerConnection(Connection *tcpconn, Connection *sockconn)
+static uint16_t registerConnection(PSC_Connection *tcpconn,
+	PSC_Connection *sockconn)
 {
-    TcpProtoData *prdat = Connection_data(tcpconn);
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
     uint16_t pos;
     for (pos = 0; pos < prdat->size; ++pos)
     {
@@ -140,20 +136,21 @@ static uint16_t registerConnection(Connection *tcpconn, Connection *sockconn)
     return registerConnectionAt(tcpconn, sockconn, pos);
 }
 
-static ClientSpec *connectionAt(Connection *tcpconn, uint16_t pos)
+static ClientSpec *connectionAt(PSC_Connection *tcpconn, uint16_t pos)
 {
-    TcpProtoData *prdat = Connection_data(tcpconn);
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
     if (pos >= prdat->size) return 0;
     return prdat->clients[pos];
 }
 
-static void unregisterConnection(Connection *tcpconn, Connection *sockconn)
+static void unregisterConnection(PSC_Connection *tcpconn,
+	PSC_Connection *sockconn)
 {
-    TcpProtoData *prdat = Connection_data(tcpconn);
-    ClientSpec *clspec = Connection_data(sockconn);
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
+    ClientSpec *clspec = PSC_Connection_data(sockconn);
     if (prdat && clspec)
     {
-	Connection_setData(sockconn, 0, 0);
+	PSC_Connection_setData(sockconn, 0, 0);
 	prdat->clients[clspec->clientno] = 0;
 	free(clspec);
     }
@@ -167,9 +164,9 @@ static void TcpProtoData_delete(void *list)
     {
 	if (self->clients[pos])
 	{
-	    Connection *sockconn = self->clients[pos]->sockconn;
+	    PSC_Connection *sockconn = self->clients[pos]->sockconn;
 	    unregisterConnection(self->clients[pos]->tcpconn, sockconn);
-	    Connection_close(sockconn);
+	    PSC_Connection_close(sockconn, 0);
 	}
     }
     free(self->clients);
@@ -181,11 +178,11 @@ static void sockDataSent(void *receiver, void *sender, void *args)
     (void)sender;
     (void)receiver;
 
-    Connection *tcpconn = args;
-    TcpProtoData *prdat = Connection_data(tcpconn);
+    PSC_Connection *tcpconn = args;
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
     if (!--prdat->nwriteconns)
     {
-	Connection_confirmDataReceived(tcpconn);
+	PSC_Connection_confirmDataReceived(tcpconn);
     }
 }
 
@@ -194,7 +191,7 @@ static void tcpDataSent(void *receiver, void *sender, void *args)
     (void)sender;
     (void)receiver;
 
-    Connection_confirmDataReceived(args);
+    PSC_Connection_confirmDataReceived(args);
 }
 
 static void tcpTick(void *receiver, void *sender, void *args)
@@ -202,40 +199,41 @@ static void tcpTick(void *receiver, void *sender, void *args)
     (void)sender;
     (void)args;
 
-    Connection *tcpconn = receiver;
-    TcpProtoData *prdat = Connection_data(tcpconn);
+    PSC_Connection *tcpconn = receiver;
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
     uint8_t ticks = ++prdat->idleTicks;
     if (prdat->state == TPS_IDENT && ticks == IDENTTICKS)
     {
-	logfmt(L_INFO, "protocol: timeout waiting for ident from %s",
+	PSC_Log_fmt(PSC_L_INFO, "protocol: timeout waiting for ident from %s",
 		connRemote(tcpconn));
-	Connection_close(tcpconn);
+	PSC_Connection_close(tcpconn, 0);
     }
     else if (ticks == CLOSETICKS)
     {
-	logfmt(L_INFO, "protocol: closing unresponsive connection to %s",
+	PSC_Log_fmt(PSC_L_INFO,
+		"protocol: closing unresponsive connection to %s",
 		connRemote(tcpconn));
-	Connection_close(tcpconn);
+	PSC_Connection_close(tcpconn, 0);
     }
     else if (ticks == PINGTICKS)
     {
-	logfmt(L_DEBUG, "protocol: pinging idle connection to %s",
+	PSC_Log_fmt(PSC_L_DEBUG, "protocol: pinging idle connection to %s",
 		connRemote(tcpconn));
 	prdat->wrbuf[0] = CMD_PING;
-	Connection_write(tcpconn, prdat->wrbuf, 1, 0);
+	PSC_Connection_sendAsync(tcpconn, prdat->wrbuf, 1, 0);
     }
 }
 
-static void sendConnStateCmd(Connection *tcpconn, uint8_t cmd,
+static void sendConnStateCmd(PSC_Connection *tcpconn, uint8_t cmd,
 	uint16_t clientno)
 {
-    logfmt(L_DEBUG, "protocol: sending %c %04x to %s", cmd,
+    PSC_Log_fmt(PSC_L_DEBUG, "protocol: sending %c %04x to %s", cmd,
 	    clientno, connRemote(tcpconn));
-    TcpProtoData *prdat = Connection_data(tcpconn);
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
     prdat->wrbuf[0] = cmd;
     prdat->wrbuf[1] = clientno >> 8;
     prdat->wrbuf[2] = clientno & 0xff;
-    Connection_write(tcpconn, prdat->wrbuf, 3, 0);
+    PSC_Connection_sendAsync(tcpconn, prdat->wrbuf, 3, 0);
 }
 
 static void sockConnectionLost(void *receiver, void *sender, void *args)
@@ -243,9 +241,9 @@ static void sockConnectionLost(void *receiver, void *sender, void *args)
     (void)receiver;
     (void)args;
 
-    Connection *sock = sender;
-    ClientSpec *client = Connection_data(sock);
-    logfmt(L_INFO, "protocol: lost socket connection to %s",
+    PSC_Connection *sock = sender;
+    ClientSpec *client = PSC_Connection_data(sock);
+    PSC_Log_fmt(PSC_L_INFO, "protocol: lost socket connection to %s",
 	    connRemote(sock));
     if (client && client->tcpconn)
     {
@@ -259,8 +257,8 @@ static void sockConnectionEstablished(void *receiver, void *sender, void *args)
     (void)receiver;
     (void)args;
 
-    Connection *sockconn = sender;
-    ClientSpec *clspec = Connection_data(sockconn);
+    PSC_Connection *sockconn = sender;
+    ClientSpec *clspec = PSC_Connection_data(sockconn);
     if (clspec && clspec->tcpconn)
     {
 	sendConnStateCmd(clspec->tcpconn, CMD_CONNECT, clspec->clientno);
@@ -271,21 +269,24 @@ static void sockDataReceived(void *receiver, void *sender, void *args)
 {
     (void)receiver;
 
-    Connection *sockconn = sender;
-    DataReceivedEventArgs *dra = args;
-    ClientSpec *clspec = Connection_data(sockconn);
+    PSC_Connection *sockconn = sender;
+    PSC_EADataReceived *dra = args;
+    ClientSpec *clspec = PSC_Connection_data(sockconn);
     if (clspec && clspec->tcpconn)
     {
-	dra->handling = 1;
-	logfmt(L_DEBUG, "protocol: sending %c %04x %04x to %s", CMD_DATA,
-		clspec->clientno, dra->size,
-		connRemote(clspec->tcpconn));
-	dra->buf[0] = CMD_DATA;
-	dra->buf[1] = clspec->clientno >> 8;
-	dra->buf[2] = clspec->clientno & 0xff;
-	dra->buf[3] = dra->size >> 8;
-	dra->buf[4] = dra->size & 0xff;
-	Connection_write(clspec->tcpconn, dra->buf, dra->size + 5, sockconn);
+	TcpProtoData *prdat = PSC_Connection_data(clspec->tcpconn);
+	PSC_EADataReceived_markHandling(dra);
+	uint16_t sz = PSC_EADataReceived_size(dra);
+	PSC_Log_fmt(PSC_L_DEBUG, "protocol: sending %c %04x %04x to %s",
+		CMD_DATA, clspec->clientno, sz, connRemote(clspec->tcpconn));
+	prdat->wrbuf[0] = CMD_DATA;
+	prdat->wrbuf[1] = clspec->clientno >> 8;
+	prdat->wrbuf[2] = clspec->clientno & 0xff;
+	prdat->wrbuf[3] = sz >> 8;
+	prdat->wrbuf[4] = sz & 0xff;
+	PSC_Connection_sendAsync(clspec->tcpconn, prdat->wrbuf, 5, 0);
+	PSC_Connection_sendAsync(clspec->tcpconn, PSC_EADataReceived_buf(dra),
+		sz, sockconn);
     }
 }
 
@@ -295,40 +296,42 @@ static void busySent(void *receiver, void *sender, void *args)
     (void)sender;
     (void)args;
 
-    Connection *conn = sender;
-    Connection_close(conn);
+    PSC_Connection *conn = sender;
+    PSC_Connection_close(conn, 0);
 }
 
 static void tcpDataReceived(void *receiver, void *sender, void *args)
 {
     (void)receiver;
 
-    Connection *tcpconn = sender;
-    DataReceivedEventArgs *dra = args;
-    TcpProtoData *prdat = Connection_data(tcpconn);
-    logfmt(L_DEBUG, "protocol: received TCP data from %s in local state %d",
+    PSC_Connection *tcpconn = sender;
+    PSC_EADataReceived *dra = args;
+    TcpProtoData *prdat = PSC_Connection_data(tcpconn);
+    const uint8_t *buf = PSC_EADataReceived_buf(dra);
+    uint16_t sz = PSC_EADataReceived_size(dra);
+    PSC_Log_fmt(PSC_L_DEBUG,
+	    "protocol: received TCP data from %s in local state %d",
 	    connRemote(tcpconn), prdat->state);
     prdat->idleTicks = 0;
     uint16_t dpos = 0;
-    while (dpos < dra->size)
+    while (dpos < sz)
     {
 	switch (prdat->state)
 	{
 	    case TPS_IDENT:
-		if (dra->buf[dpos] != CMD_IDENT
-			|| ++dpos == dra->size) goto error;
-		if (dra->buf[dpos] != ARG_SERVER
-			&& dra->buf[dpos] != ARG_CLIENT) goto error;
-		if (sockserver && dra->buf[dpos] == ARG_SERVER)
+		if (buf[dpos] != CMD_IDENT || ++dpos == sz) goto error;
+		if (buf[dpos] != ARG_SERVER
+			&& buf[dpos] != ARG_CLIENT) goto error;
+		if (sockserver && buf[dpos] == ARG_SERVER)
 		{
-		    logfmt(L_INFO, "protocol: "
+		    PSC_Log_fmt(PSC_L_INFO, "protocol: "
 			    "dropping connection to other socket server at %s",
 			    connRemote(tcpconn));
 		    goto error;
 		}
-		if (!sockserver && dra->buf[dpos] == ARG_CLIENT)
+		if (!sockserver && buf[dpos] == ARG_CLIENT)
 		{
-		    logfmt(L_INFO, "protocol: "
+		    PSC_Log_fmt(PSC_L_INFO, "protocol: "
 			    "dropping connection to other socket client at %s",
 			    connRemote(tcpconn));
 		    goto error;
@@ -339,16 +342,16 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 		{
 		    prdat->wrbuf[0] = CMD_IDENT;
 		    prdat->wrbuf[1] = sockserver ? ARG_SERVER : ARG_CLIENT;
-		    Connection_write(tcpconn, prdat->wrbuf, 2, 0);
+		    PSC_Connection_sendAsync(tcpconn, prdat->wrbuf, 2, 0);
 		}
 		break;
 
 	    case TPS_DEFAULT:
-		switch (dra->buf[dpos])
+		switch (buf[dpos])
 		{
 		    case CMD_PING:
 			prdat->wrbuf[0] = CMD_PONG;
-			Connection_write(tcpconn, prdat->wrbuf, 1, 0);
+			PSC_Connection_sendAsync(tcpconn, prdat->wrbuf, 1, 0);
 			++dpos;
 			continue;
 		    case CMD_PONG:
@@ -371,112 +374,115 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 		    default:
 			goto error;
 		}
-		prdat->rdbuf[prdat->rdbufpos++] = dra->buf[dpos++];
+		prdat->rdbuf[prdat->rdbufpos++] = buf[dpos++];
 		prdat->state = TPS_RDCMD;
 		break;
 
 	    case TPS_RDCMD:
-		prdat->rdbuf[prdat->rdbufpos++] = dra->buf[dpos++];
+		prdat->rdbuf[prdat->rdbufpos++] = buf[dpos++];
 		if (!--prdat->rdexpect)
 		{
 		    uint16_t clientno =
 			(prdat->rdbuf[1] << 8) | prdat->rdbuf[2];
-		    Connection *sockclient;
+		    PSC_Connection *sockclient;
 		    ClientSpec *client;
 		    switch (prdat->rdbuf[0])
 		    {
 			case CMD_HELLO:
-			    logfmt(L_DEBUG, "protocol: received %c %04x "
-				    "from %s", CMD_HELLO, clientno,
-				    connRemote(tcpconn));
-			    sockclient = Connection_createUnixClient(cfg, 5);
+			    PSC_Log_fmt(PSC_L_DEBUG,
+				    "protocol: received %c %04x from %s",
+				    CMD_HELLO, clientno, connRemote(tcpconn));
+			    sockclient = PSC_Connection_createUnixClient(
+				    cfg->sockname);
 			    if (sockclient &&
 				    registerConnectionAt(tcpconn,
 					sockclient, clientno) == clientno)
 			    {
-				Event_register(
-					Connection_connected(sockclient),
+				PSC_Event_register(
+					PSC_Connection_connected(sockclient),
 					0, sockConnectionEstablished, 0);
-				Event_register(
-					Connection_dataReceived(sockclient),
+				PSC_Event_register(
+					PSC_Connection_dataReceived(
+					    sockclient),
 					0, sockDataReceived, 0);
-				Event_register(
-					Connection_dataSent(sockclient),
+				PSC_Event_register(
+					PSC_Connection_dataSent(sockclient),
 					0, sockDataSent, 0);
-				Event_register(
-					Connection_closed(sockclient),
+				PSC_Event_register(
+					PSC_Connection_closed(sockclient),
 					0, sockConnectionLost, 0);
-				logfmt(L_INFO, "protocol: new remote socket "
+				PSC_Log_fmt(PSC_L_INFO,
+					"protocol: new remote socket "
 					"client from %s on %s",
 					connRemote(tcpconn),
 					connRemote(sockclient));
 			    }
 			    else
 			    {
-				logfmt(L_WARNING, "protocol: cannot connect "
+				PSC_Log_fmt(PSC_L_WARNING,
+					"protocol: cannot connect "
 					"new remote socket client from %s",
 					connRemote(tcpconn));
-				if (sockclient) Connection_destroy(sockclient);
+				if (sockclient) PSC_Connection_close(
+					sockclient, 0);
 				sendConnStateCmd(tcpconn, CMD_BYE, clientno);
 			    }
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_CONNECT:
-			    logfmt(L_DEBUG, "protocol: received %c %04x "
-				    "from %s", CMD_CONNECT, clientno,
+			    PSC_Log_fmt(PSC_L_DEBUG,
+				    "protocol: received %c %04x from %s",
+				    CMD_CONNECT, clientno,
 				    connRemote(tcpconn));
 			    client = connectionAt(tcpconn, clientno);
 			    if (!client)
 			    {
-				logfmt(L_INFO, "protocol: ignored accepted "
+				PSC_Log_fmt(PSC_L_INFO,
+					"protocol: ignored accepted "
 					"socket client from %s "
 					"(already closed)",
 					connRemote(tcpconn));
 				break;
 			    }
 			    sockclient = client->sockconn;
-			    logfmt(L_INFO, "protocol: remote socket client "
+			    PSC_Log_fmt(PSC_L_INFO,
+				    "protocol: remote socket client "
 				    "accepted from %s",
 				    connRemote(tcpconn));
-			    Connection_activate(sockclient);
+			    PSC_Connection_activate(sockclient);
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_BYE:
-			    logfmt(L_DEBUG, "protocol: received %c %04x "
-				    "from %s", CMD_BYE, clientno,
-				    connRemote(tcpconn));
+			    PSC_Log_fmt(PSC_L_DEBUG,
+				    "protocol: received %c %04x from %s",
+				    CMD_BYE, clientno, connRemote(tcpconn));
 			    client = connectionAt(tcpconn, clientno);
 			    if (!client)
 			    {
-				logfmt(L_INFO, "protocol: ignored closed "
+				PSC_Log_fmt(PSC_L_INFO,
+					"protocol: ignored closed "
 					"socket client from %s "
 					"(already closed)",
 					connRemote(tcpconn));
 				break;
 			    }
 			    sockclient = client->sockconn;
-			    logfmt(L_INFO, "protocol: remote socket client "
+			    PSC_Log_fmt(PSC_L_INFO,
+				    "protocol: remote socket client "
 				    "from %s disconnected on %s",
 				    connRemote(tcpconn),
 				    connRemote(sockclient));
 			    unregisterConnection(tcpconn, sockclient);
-			    if (sockserver)
-			    {
-				Connection_close(sockclient);
-			    }
-			    else
-			    {
-				Connection_destroy(sockclient);
-			    }
+			    PSC_Connection_close(sockclient, 0);
 			    prdat->state = TPS_DEFAULT;
 			    break;
 			case CMD_DATA:
 			    prdat->clientno = clientno;
 			    prdat->rdexpect =
 				(prdat->rdbuf[3] << 8) | prdat->rdbuf[4];
-			    logfmt(L_DEBUG, "protocol: received %c %04x %04x "
-				    "from %s", CMD_DATA, clientno,
-				    prdat->rdexpect,
+			    PSC_Log_fmt(PSC_L_DEBUG,
+				    "protocol: received %c %04x %04x from %s",
+				    CMD_DATA, clientno, prdat->rdexpect,
 				    connRemote(tcpconn));
 			    prdat->state = TPS_RDDATA;
 			    break;
@@ -487,15 +493,15 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 
 	    case TPS_RDDATA:
 		{
-		    uint16_t chunksz = dra->size - dpos;
+		    uint16_t chunksz = sz - dpos;
 		    if (chunksz > prdat->rdexpect) chunksz = prdat->rdexpect;
 		    ClientSpec *client = connectionAt(
 			    tcpconn, prdat->clientno);
 		    if (client)
 		    {
 			++prdat->nwriteconns;
-			dra->handling = 1;
-			Connection_write(client->sockconn, dra->buf + dpos,
+			PSC_EADataReceived_markHandling(dra);
+			PSC_Connection_sendAsync(client->sockconn, buf + dpos,
 				chunksz, tcpconn);
 		    }
 		    dpos += chunksz;
@@ -505,7 +511,8 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
 			prdat->state = TPS_DEFAULT;
 			if (!client)
 			{
-			    logfmt(L_INFO, "protocol: ignored data from %s "
+			    PSC_Log_fmt(PSC_L_INFO,
+				    "protocol: ignored data from %s "
 				    "for closed socket",
 				    connRemote(tcpconn));
 			}
@@ -517,9 +524,9 @@ static void tcpDataReceived(void *receiver, void *sender, void *args)
     return;
 
 error:
-    logfmt(L_INFO, "protocol: protocol error from %s",
+    PSC_Log_fmt(PSC_L_INFO, "protocol: protocol error from %s",
 	    connRemote(tcpconn));
-    Connection_close(tcpconn);
+    PSC_Connection_close(tcpconn, 0);
 }
 
 static void tcpReconnect(void *receiver, void *sender, void *args);
@@ -532,7 +539,7 @@ static void disableReconnTick(void *receiver, void *sender, void *args)
 
     if (reconnTicking && pendingtcp)
     {
-	Event_unregister(Service_tick(), 0, tcpReconnect, 0);
+	PSC_Event_unregister(PSC_Service_tick(), 0, tcpReconnect, 0);
 	reconnTicking = 0;
     }
 }
@@ -542,11 +549,11 @@ static void tcpConnectionLost(void *receiver, void *sender, void *args)
     (void)receiver;
     (void)args;
 
-    Connection *conn = sender;
+    PSC_Connection *conn = sender;
     if (conn != pendingtcp)
     {
-	Event_unregister(Service_tick(), conn, tcpTick, 0);
-	logfmt(L_INFO, "protocol: lost TCP connection to %s",
+	PSC_Event_unregister(PSC_Service_tick(), conn, tcpTick, 0);
+	PSC_Log_fmt(PSC_L_INFO, "protocol: lost TCP connection to %s",
 		connRemote(conn));
     }
     if (conn == tcpclient || conn == pendingtcp)
@@ -557,8 +564,8 @@ static void tcpConnectionLost(void *receiver, void *sender, void *args)
 	}
 	if (!tcpserver)
 	{
-	    logmsg(L_DEBUG, "protocol: scheduling TCP reconnect");
-	    Event_register(Service_tick(), 0, tcpReconnect, 0);
+	    PSC_Log_msg(PSC_L_DEBUG, "protocol: scheduling TCP reconnect");
+	    PSC_Event_register(PSC_Service_tick(), 0, tcpReconnect, 0);
 	    reconnTicking = 1;
 	    reconnWait = pendingtcp ? RECONNTICKS : 1;
 	    pendingtcp = 0;
@@ -573,16 +580,17 @@ static void tcpConnectionEstablished(void *receiver, void *sender, void *args)
 
     if (tcpclient || sender != pendingtcp)
     {
-	logmsg(L_FATAL, "protocol: unexpected TCP connection");
-	Service_quit();
+	PSC_Service_panic("protocol: unexpected TCP connection");
     }
     tcpclient = sender;
     pendingtcp = 0;
-    Event_register(Connection_dataReceived(tcpclient), 0, tcpDataReceived, 0);
-    Event_register(Connection_dataSent(tcpclient), 0, tcpDataSent, 0);
-    Event_register(Service_tick(), tcpclient, tcpTick, 0);
-    Connection_setData(tcpclient, TcpProtoData_create(), TcpProtoData_delete);
-    logfmt(L_INFO, "protocol: TCP connection established to %s",
+    PSC_Event_register(PSC_Connection_dataReceived(tcpclient), 0,
+	    tcpDataReceived, 0);
+    PSC_Event_register(PSC_Connection_dataSent(tcpclient), 0, tcpDataSent, 0);
+    PSC_Event_register(PSC_Service_tick(), tcpclient, tcpTick, 0);
+    PSC_Connection_setData(tcpclient, TcpProtoData_create(),
+	    TcpProtoData_delete);
+    PSC_Log_fmt(PSC_L_INFO, "protocol: TCP connection established to %s",
 	    connRemote(tcpclient));
 }
 
@@ -594,16 +602,16 @@ static void tcpReconnect(void *receiver, void *sender, void *args)
 
     if (!--reconnWait)
     {
-	logmsg(L_DEBUG, "protocol: attempting to reconnect TCP");
-	pendingtcp = Connection_createTcpClient(cfg, 0);
+	PSC_Log_msg(PSC_L_DEBUG, "protocol: attempting to reconnect TCP");
+	pendingtcp = PSC_Connection_createTcpClient(tcpopts);
 	if (!pendingtcp)
 	{
 	    reconnWait = RECONNTICKS;
 	    return;
 	}
-	Event_register(Connection_connected(pendingtcp), 0,
+	PSC_Event_register(PSC_Connection_connected(pendingtcp), 0,
 		tcpConnectionEstablished, 0);
-	Event_register(Connection_closed(pendingtcp), 0,
+	PSC_Event_register(PSC_Connection_closed(pendingtcp), 0,
 		tcpConnectionLost, 0);
     }
 }
@@ -613,30 +621,34 @@ static void tcpClientConnected(void *receiver, void *sender, void *args)
     (void)receiver;
     (void)sender;
 
-    Connection *client = args;
+    PSC_Connection *client = args;
     if (sockserver)
     {
 	if (tcpclient)
 	{
-	    logfmt(L_DEBUG, "protocol: rejecting second TCP connection from "
+	    PSC_Log_fmt(PSC_L_DEBUG,
+		    "protocol: rejecting second TCP connection from "
 		    "%s to socket server", connRemote(client));
-	    Event_register(Connection_dataSent(client), 0, busySent, 0);
-	    Connection_write(client, (const uint8_t *)"busy.\n", 6, client);
+	    PSC_Event_register(PSC_Connection_dataSent(client), 0,
+		    busySent, 0);
+	    PSC_Connection_sendAsync(client,
+		    (const uint8_t *)"busy.\n", 6, client);
 	    return;
 	}
 	tcpclient = client;
     }
     TcpProtoData *prdat = TcpProtoData_create();
-    Connection_setData(client, prdat, TcpProtoData_delete);
-    Event_register(Connection_closed(client), 0, tcpConnectionLost, 0);
-    Event_register(Connection_dataReceived(client), 0, tcpDataReceived, 0);
-    Event_register(Connection_dataSent(client), 0, tcpDataSent, 0);
-    logfmt(L_INFO, "protocol: TCP client connected from %s",
+    PSC_Connection_setData(client, prdat, TcpProtoData_delete);
+    PSC_Event_register(PSC_Connection_closed(client), 0, tcpConnectionLost, 0);
+    PSC_Event_register(PSC_Connection_dataReceived(client), 0,
+	    tcpDataReceived, 0);
+    PSC_Event_register(PSC_Connection_dataSent(client), 0, tcpDataSent, 0);
+    PSC_Log_fmt(PSC_L_INFO, "protocol: TCP client connected from %s",
 	    connRemote(client));
-    Event_register(Service_tick(), client, tcpTick, 0);
+    PSC_Event_register(PSC_Service_tick(), client, tcpTick, 0);
     prdat->wrbuf[0] = CMD_IDENT;
     prdat->wrbuf[1] = sockserver ? ARG_SERVER : ARG_CLIENT;
-    Connection_write(client, prdat->wrbuf, 2, 0);
+    PSC_Connection_sendAsync(client, prdat->wrbuf, 2, 0);
 }
 
 static void sockClientConnected(void *receiver, void *sender, void *args)
@@ -644,16 +656,17 @@ static void sockClientConnected(void *receiver, void *sender, void *args)
     (void)receiver;
     (void)sender;
 
-    Connection *client = args;
-    logfmt(L_INFO, "protocol: new socket client on %s",
+    PSC_Connection *client = args;
+    PSC_Log_fmt(PSC_L_INFO, "protocol: new socket client on %s",
 	    connRemote(client));
     if (!tcpclient)
     {
-	Connection_close(client);
+	PSC_Connection_close(client, 0);
 	return;
     }
-    Event_register(Connection_dataReceived(client), 0, sockDataReceived, 0);
-    Event_register(Connection_dataSent(client), 0, sockDataSent, 0);
+    PSC_Event_register(PSC_Connection_dataReceived(client), 0,
+	    sockDataReceived, 0);
+    PSC_Event_register(PSC_Connection_dataSent(client), 0, sockDataSent, 0);
     uint16_t clientno = registerConnection(tcpclient, client);
     sendConnStateCmd(tcpclient, CMD_HELLO, clientno);
 }
@@ -663,9 +676,9 @@ static void sockClientDisconnected(void *receiver, void *sender, void *args)
     (void)receiver;
     (void)sender;
 
-    Connection *client = args;
-    ClientSpec *clspec = Connection_data(client);
-    logfmt(L_INFO, "protocol: socket client disconnected on %s",
+    PSC_Connection *client = args;
+    ClientSpec *clspec = PSC_Connection_data(client);
+    PSC_Log_fmt(PSC_L_INFO, "protocol: socket client disconnected on %s",
 	    connRemote(client));
     if (clspec && clspec->tcpconn)
     {
@@ -682,54 +695,69 @@ int Protocol_init(const Config *config)
     reconnTicking = 0;
     if (!config->sockClient)
     {
-	sockserver = Server_createUnix(config, CCM_WAIT, 5);
+	PSC_UnixServerOpts *opts = PSC_UnixServerOpts_create(config->sockname);
+	PSC_UnixServerOpts_owner(opts, config->sockuid, config->sockgid);
+	PSC_UnixServerOpts_mode(opts, config->sockmode);
+	PSC_UnixServerOpts_connWait(opts);
+	sockserver = PSC_Server_createUnix(opts);
+	PSC_UnixServerOpts_destroy(opts);
 	if (!sockserver) return -1;
-	Event_register(Server_clientConnected(sockserver), 0,
+	PSC_Event_register(PSC_Server_clientConnected(sockserver), 0,
 		sockClientConnected, 0);
-	Event_register(Server_clientDisconnected(sockserver), 0,
+	PSC_Event_register(PSC_Server_clientDisconnected(sockserver), 0,
 		sockClientDisconnected, 0);
     }
     if (config->remotehost)
     {
-	pendingtcp = Connection_createTcpClient(config, 0);
+	tcpopts = PSC_TcpClientOpts_create(config->remotehost, config->port);
+	if (config->numericHosts) PSC_TcpClientOpts_numericHosts(tcpopts);
+	pendingtcp = PSC_Connection_createTcpClient(tcpopts);
 	if (!pendingtcp)
 	{
-	    Server_destroy(sockserver);
+	    PSC_Server_destroy(sockserver);
 	    sockserver = 0;
 	    return -1;
 	}
-	Event_register(Connection_connected(pendingtcp), 0,
+	PSC_Event_register(PSC_Connection_connected(pendingtcp), 0,
 		tcpConnectionEstablished, 0);
-	Event_register(Connection_closed(pendingtcp), 0,
+	PSC_Event_register(PSC_Connection_closed(pendingtcp), 0,
 		tcpConnectionLost, 0);
-	Event_register(Service_eventsDone(), 0, disableReconnTick, 0);
+	PSC_Event_register(PSC_Service_eventsDone(), 0, disableReconnTick, 0);
     }
     else
     {
-	tcpserver = Server_createTcp(config, CCM_NORMAL, 0);
+	PSC_TcpServerOpts *opts = PSC_TcpServerOpts_create(config->port);
+	for (int i = 0; i < MAXBINDS && config->bindaddr[i]; ++i)
+	{
+	    PSC_TcpServerOpts_bind(opts, config->bindaddr[i]);
+	}
+	if (config->numericHosts) PSC_TcpServerOpts_numericHosts(opts);
+	tcpserver = PSC_Server_createTcp(opts);
+	PSC_TcpServerOpts_destroy(opts);
 	if (!tcpserver)
 	{
-	    Server_destroy(sockserver);
+	    PSC_Server_destroy(sockserver);
 	    sockserver = 0;
 	    return -1;
 	}
-	Event_register(Server_clientConnected(tcpserver), 0,
+	PSC_Event_register(PSC_Server_clientConnected(tcpserver), 0,
 		tcpClientConnected, 0);
     }
-    Service_setTickInterval(5000);
     return 0;
 }
 
 int Protocol_done(void)
 {
     if (!cfg) return -1;
-    if (tcpclient) Connection_close(tcpclient);
-    if (pendingtcp) Connection_close(pendingtcp);
-    Server_destroy(sockserver);
-    Server_destroy(tcpserver);
+    if (tcpclient) PSC_Connection_close(tcpclient, 0);
+    if (pendingtcp) PSC_Connection_close(pendingtcp, 0);
+    PSC_Server_destroy(sockserver);
+    PSC_Server_destroy(tcpserver);
+    PSC_TcpClientOpts_destroy(tcpopts);
     tcpclient = 0;
     sockserver = 0;
     tcpserver = 0;
+    tcpopts = 0;
     cfg = 0;
     return 0;
 }
