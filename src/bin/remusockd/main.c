@@ -1,5 +1,5 @@
 #include "config.h"
-#include "protocol.h"
+#include "remusock.h"
 
 #include <poser/core.h>
 #include <stdlib.h>
@@ -11,7 +11,7 @@ static void startup(void *receiver, void *sender, void *args)
     (void)sender;
 
     Config *config = receiver;
-    if (Protocol_init(config) < 0)
+    if (RemUSock_init(config) < 0)
     {
 	PSC_EAStartup_return(args, EXIT_FAILURE);
     }
@@ -29,7 +29,7 @@ static void shutdown(void *receiver, void *sender, void *args)
     (void)sender;
     (void)args;
 
-    Protocol_done();
+    RemUSock_done();
 }
 
 int main(int argc, char **argv)

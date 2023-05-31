@@ -1,6 +1,9 @@
 remusockd_MODULES:=	config \
 			main \
-			protocol
+			protocol \
+			remusock \
+			tcpclient \
+			tcpserver
 
 remusockd_PKGDEPS:=	posercore
 
