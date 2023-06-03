@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      POSERVER: 1.0.1
+      POSERDL: https://github.com/Zirias/poser/releases/download
+    steps:
+    - uses: actions/checkout@v3
+    - name: environment
+      run: |
+        echo "PKG_CONFIG_PATH=${HOME}/work/.local/lib/pkgconfig" >> "$GITHUB_ENV"
+        echo "prefix=${HOME}/work/.local" >> "$GITHUB_ENV"
+    - name: submodules
+      run: git submodule update --init
+    - name: dependencies
+      run: |
+        wget ${POSERDL}/v${POSERVER}/poser-${POSERVER}.tar.xz
+        tar xf poser-${POSERVER}.tar.xz
+        cd poser-${POSERVER}
+        make -j4 install-strip
+    - name: make
+      run: make -j4 CFLAGS="-Wall -Wextra -pedantic -Werror"
