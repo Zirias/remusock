@@ -10,6 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      CI_CFLAGS: -O2 -std=c11 -Wall -Wextra -Wshadow -Werror -pedantic
       POSERVER: 1.0.1
       POSERDL: https://github.com/Zirias/poser/releases/download
     steps:
@@ -27,4 +28,4 @@ jobs:
         cd poser-${POSERVER}
         make -j4 install-strip
     - name: make
-      run: make -j4 CFLAGS="-Wall -Wextra -pedantic -Werror"
+      run: make -j4 CFLAGS="${CI_CFLAGS}"
