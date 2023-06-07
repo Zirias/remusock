@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI_CFLAGS: -O2 -std=c11 -Wall -Wextra -Wshadow -Werror -pedantic
-      POSERVER: 1.0.1
+      POSERVER: 1.1
       POSERDL: https://github.com/Zirias/poser/releases/download
     steps:
     - uses: actions/checkout@v3
