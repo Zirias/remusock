@@ -62,6 +62,10 @@ Usage: remusockd [-Vcfntv] [-C CAfile] [-H hash[:hash...]]
 
 ### Building
 
+To build `remusock`, you will need to have
+[poser](https://github.com/Zirias/poser) installed, currently at least in
+version `1.1`.
+
 To build a release version, just extract the source tarball (e.g.
 `remusock-2.0.txz`) and run this in the source directory:
 
