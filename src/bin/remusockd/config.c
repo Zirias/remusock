@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
@@ -20,11 +21,19 @@
 
 static void usage(const char *prgname)
 {
-    fprintf(stderr, "Usage: %s [-cfnv] [-b address]\n"
-	    "\t\t[-g group] [-m mode] [-p pidfile]\n"
-	    "\t\t[-r remotehost] [-u user] socket port\n",
+    fprintf(stderr, "Usage: %s [-Vcfntv] [-C CAfile] [-H hash[:hash...]]\n"
+	    "\t\t[-b address] [-g group] [-m mode] [-p pidfile]\n"
+	    "\t\t[-r remotehost] [-u user] socket port [cert key]\n",
 	    prgname);
-    fputs("\n\t-b address     when listening, only bind to this address\n"
+    fputs("\n\t-C CAfile      A file with one or more CA certificates in\n"
+	    "\t               PEM format. When listening, require a client\n"
+	    "\t               certificate issued by one of these CAs.\n"
+	    "\t-H hash[:...]  One or more SHA-512 hashes (128 hex digits).\n"
+	    "\t               When listening, require a client certificate\n"
+	    "\t               matching one of these hashes (fingerprints).\n"
+	    "\t-V             When connecting to a remote host with TLS,\n"
+	    "\t               don't verify the server certificate\n"
+	    "\t-b address     when listening, only bind to this address\n"
 	    "\t               instead of any\n"
 	    "\t               (can be given up to " STR(MAXBINDS) " times)\n"
 	    "\t-c             open unix domain socket as client\n"
@@ -37,12 +46,19 @@ static void usage(const char *prgname)
 	    "\t-n             numeric hosts, do not resolve remote addresses\n"
 	    "\t-p pidfile     use `pidfile' instead of compile-time default\n"
 	    "\t-r remotehost  connect to `remotehost' instead of listening\n"
+	    "\t-t             Enable TLS. This is implied when a cert and\n"
+	    "\t               key, or -C or -H are given. When listening\n"
+	    "\t               with TLS enabled, cert and key are required\n"
+	    "\t               and must match the hostname used to connect to\n"
+	    "\t               this instance.\n"
 	    "\t-u user        user name or id for the server socket\n"
 	    "\t               when started as root, run as this user\n"
 	    "\t-v             verbose logging output\n"
 	    "\n"
 	    "\tsocket         unix domain socket to open\n"
-	    "\tport           TCP port to connect to or listen on\n\n",
+	    "\tport           TCP port to connect to or listen on\n"
+	    "\tcert           Certificate to use in PEM format\n"
+	    "\tkey            Private key of the cert in PEM format\n\n",
 	    stderr);
 }
 
@@ -74,12 +90,40 @@ static int longArg(long *setting, char *op)
     return 0;
 }
 
+static int validhashes(char *str)
+{
+    int pos = 0;
+    for (;;)
+    {
+	while (pos < 128)
+	{
+	    if (!isxdigit(*str)) return 0;
+	    *str = tolower(*str);
+	    ++str;
+	    ++pos;
+	}
+	if (!*str) return 1;
+	if (*str != ':') return 0;
+	++str;
+	pos = 0;
+    }
+}
+
 static int optArg(Config *config, char *args, int *idx, char *op)
 {
     if (!*idx) return -1;
     int i;
     switch (args[--*idx])
     {
+	case 'C':
+	    config->cacerts = op;
+	    config->tls = 1;
+	    break;
+	case 'H':
+	    if (!validhashes(op)) return -1;
+	    config->hashes = op;
+	    config->tls = 1;
+	    break;
 	case 'b':
 	    for (i = 0; i < MAXBINDS; ++i)
 	    {
@@ -132,10 +176,12 @@ int Config_fromOpts(Config *config, int argc, char **argv)
     int escapedash = 0;
     int needsocket = 1;
     int needport = 1;
+    int havecert = 0;
+    int needkey = 0;
     int arg;
     int naidx = 0;
     char needargs[ARGBUFSZ];
-    const char onceflags[] = "cfgmnpruv";
+    const char onceflags[] = "CHVcfgmnprtuv";
     char seen[sizeof onceflags - 1] = {0};
 
     memset(config, 0, sizeof *config);
@@ -180,6 +226,8 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 		}
 		switch (*o)
 		{
+		    case 'C':
+		    case 'H':
 		    case 'b':
 		    case 'g':
 		    case 'm':
@@ -187,6 +235,11 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 		    case 'r':
 		    case 'u':
 			if (addArg(needargs, &naidx, *o) < 0) return -1;
+			break;
+
+		    case 'V':
+			config->noverify = 1;
+			config->tls = 1;
 			break;
 
 		    case 'c':
@@ -199,6 +252,10 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 
 		    case 'n':
 			config->numericHosts = 1;
+			break;
+
+		    case 't':
+			config->tls = 1;
 			break;
 
 		    case 'v':
@@ -231,6 +288,18 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 		}
 		needport = 0;
 	    }
+	    else if (needkey)
+	    {
+		config->key = o;
+		needkey = 0;
+	    }
+	    else if (!havecert)
+	    {
+		config->cert = o;
+		config->tls = 1;
+		havecert = 1;
+		needkey = 1;
+	    }
 	    else
 	    {
 		usage(prgname);
@@ -240,7 +309,11 @@ int Config_fromOpts(Config *config, int argc, char **argv)
 	}
 next:	;
     }
-    if (naidx || needsocket || needport)
+    if (naidx || needsocket || needport || needkey
+	    || (config->remotehost && config->bindaddr[0])
+	    || (config->remotehost && (config->cacerts || config->hashes))
+	    || (!config->remotehost && config->tls && !config->cert)
+	    || (!config->remotehost && config->noverify))
     {
 	usage(prgname);
 	return -1;

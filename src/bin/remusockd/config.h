@@ -12,6 +12,10 @@ typedef struct Config
     const char *pidfile;
     const char *sockname;
     const char *remotehost;
+    const char *cert;
+    const char *key;
+    const char *cacerts;
+    const char *hashes;
     long sockuid;
     long sockgid;
     int sockClient;
@@ -19,6 +23,8 @@ typedef struct Config
     int port;
     int numericHosts;
     int sockmode;
+    int tls;
+    int noverify;
 } Config;
 
 int Config_fromOpts(Config *config, int argc, char **argv);
