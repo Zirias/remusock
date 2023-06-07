@@ -18,6 +18,14 @@ typedef struct ClientRec
     int identticks;
 } ClientRec;
 
+static void identtimeout(void *receiver, void *sender, void *args);
+static void identabort(void *receiver, void *sender, void *args);
+static void deleteproto(void *proto);
+static void identcheck(void *receiver, void *sender, void *args);
+static void identsent(void *receiver, void *sender, void *args);
+static void clientConnected(void *receiver, void *sender, void *args);
+static void clientDisconnected(void *receiver, void *sender, void *args);
+
 static void identtimeout(void *receiver, void *sender, void *args)
 {
     (void)sender;
@@ -38,6 +46,8 @@ static void identabort(void *receiver, void *sender, void *args)
 
     ClientRec *cr = receiver;
 
+    PSC_Event_unregister(PSC_Connection_dataSent(cr->client), cr,
+	    identsent, 0);
     PSC_Event_unregister(PSC_Service_tick(), cr, identtimeout, 0);
 }
 
@@ -107,7 +117,6 @@ static void identsent(void *receiver, void *sender, void *args)
 
     PSC_Event_register(PSC_Service_tick(), cr, identtimeout, 0);
     PSC_Event_register(PSC_Connection_dataReceived(client), cr, identcheck, 0);
-    PSC_Event_register(PSC_Connection_closed(client), cr, identabort, 0);
     PSC_Event_unregister(PSC_Connection_dataSent(client), cr, identsent, 0);
 
     PSC_Connection_receiveBinary(client, 2);
@@ -137,6 +146,7 @@ static void clientConnected(void *receiver, void *sender, void *args)
     cr->identticks = IDENTTICKS;
     PSC_Connection_setData(client, cr, free);
 
+    PSC_Event_register(PSC_Connection_closed(client), cr, identabort, 0);
     PSC_Event_register(PSC_Connection_dataSent(client), cr, identsent, 0);
 
     PSC_Connection_sendAsync(client, idmsg, 2, cr);
